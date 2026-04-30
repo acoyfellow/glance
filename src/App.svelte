@@ -1,8 +1,8 @@
 <script lang="ts">
   type Lane = { name:string; state:string; risk:string; why:string; finding:string; next:string; source:string };
   type Worker = { name:string; status:string; session:number; max_sessions:number; question?:string; controllerAlive?:boolean; currentActivity?:string };
-  type GitRepo = { path:string; branch:string; head:string; dirty:number; staged:number; unstaged:number; untracked:number; ahead:number; behind:number; attention:string; noiseReason:string|null; sample:string[] };
-  type GitObserver = { generatedAt:string|null; repoCount:number; dirtyCount:number; attentionCount:number; noiseCount:number; aheadCount:number; behindCount:number; repos:GitRepo[]; delta?: any };
+  type GitRepo = { path:string; branch:string; head:string; dirty:number; staged:number; unstaged:number; untracked:number; ahead:number; behind:number; attention:string; noiseReason:string|null; lastEditedAt:string|null; lastEditedPath:string|null; focusScore:number; sample:string[] };
+  type GitObserver = { generatedAt:string|null; repoCount:number; dirtyCount:number; attentionCount:number; noiseCount:number; aheadCount:number; behindCount:number; focus:GitRepo[]; repos:GitRepo[]; delta?: any };
   type Dash = { generatedAt:string; workers:Worker[]; activeWorkers:Worker[]; machine:{ worker:string; state:any; controllerAlive:boolean; lastPing:string|null; pings:string[]}; gitObserver:GitObserver; lanes:(Lane & { activeNow?: boolean })[]; events:any[]; recentRuns:any[] };
   let data: Dash | null = null;
   let connected = false;
@@ -19,6 +19,7 @@
   $: workState = workRunning ? 'Running' : data?.workers?.some(w => w.status === 'waiting_for_input') ? 'Waiting' : 'Paused';
   $: observeState = observeOn ? 'On' : 'Off';
   $: dirtyRepos = data?.gitObserver?.repos?.filter((repo) => repo.dirty > 0) || [];
+  $: focusRepos = data?.gitObserver?.focus || [];
   $: lastEvent = [...(data?.events || [])].reverse()[0];
   $: deltaCount = (data?.gitObserver?.delta?.newDirty?.length || 0)
     + (data?.gitObserver?.delta?.cleaned?.length || 0)
@@ -160,6 +161,7 @@
         <div><span>Repos</span><b>{data.gitObserver?.repoCount || 0}</b></div>
         <div><span>Attention</span><b>{data.gitObserver?.attentionCount || 0}</b></div>
         <div><span>Noise</span><b>{data.gitObserver?.noiseCount || 0}</b></div>
+        <div><span>Focus</span><b>{focusRepos[0]?.path || 'unknown'}</b></div>
         <div><span>Delta</span><b>{deltaCount}</b></div>
         <div><span>Updated</span><b>{data.gitObserver?.generatedAt ? new Date(data.gitObserver.generatedAt).toLocaleTimeString() : 'never'}</b></div>
       </div>
@@ -186,6 +188,18 @@
       {#if lastEvent}
         <div class="last-signal">{lastEvent.summary || lastEvent.objective || lastEvent.status || lastEvent.question || lastEvent.ts}</div>
       {/if}
+    </div>
+
+    <div class="instrument focus-instrument">
+      <div class="instrument-head"><span>Likely Focus</span><span class="muted">mtime ranked</span></div>
+      <div class="focus-stack">
+        {#each focusRepos as repo (repo.path)}
+          <button class="focus-line" on:click={() => inspectRepo(repo)}>
+            <b>{repo.path}</b>
+            <span>{repo.lastEditedAt ? new Date(repo.lastEditedAt).toLocaleTimeString() : 'unknown'} · {repo.lastEditedPath || 'no file'} · score {repo.focusScore}</span>
+          </button>
+        {/each}
+      </div>
     </div>
 
     <div class="instrument lane-instrument">
@@ -295,7 +309,7 @@
           {#each data.gitObserver?.repos || [] as repo (repo.path)}
             <div class="drawer-row">
               <b>{repo.path}</b>
-              <span>{repo.branch} · {repo.head} · {repo.attention} · {repo.dirty ? `${repo.dirty} dirty` : 'clean'}{repo.noiseReason ? ` · ${repo.noiseReason}` : ''}</span>
+              <span>{repo.branch} · {repo.head} · {repo.attention} · {repo.dirty ? `${repo.dirty} dirty` : 'clean'}{repo.lastEditedAt ? ` · edited ${new Date(repo.lastEditedAt).toLocaleString()}` : ''}{repo.noiseReason ? ` · ${repo.noiseReason}` : ''}</span>
               {#if repo.sample?.length}<p>{repo.sample.join('\\n')}</p>{/if}
             </div>
           {/each}

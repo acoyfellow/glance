@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -21,6 +21,9 @@ type RepoState = {
   behind: number;
   attention: "clean" | "low" | "medium" | "high" | "noise";
   noiseReason: string | null;
+  lastEditedAt: string | null;
+  lastEditedPath: string | null;
+  focusScore: number;
   sample: string[];
 };
 
@@ -75,6 +78,7 @@ function summarize(repo: string): RepoState {
   const behind = Number(branchLine.match(/behind (\d+)/)?.[1] ?? 0);
   const head = git(repo, ["rev-parse", "--short", "HEAD"]).stdout.trim() || "unknown";
   const classification = classify(changes);
+  const lastEdit = lastEdited(repo, changes);
   return {
     path: relative(ROOT, repo) || ".",
     branch,
@@ -86,8 +90,46 @@ function summarize(repo: string): RepoState {
     ahead,
     behind,
     ...classification,
+    ...lastEdit,
+    focusScore: focusScore(changes.length, classification.attention, lastEdit.lastEditedAt),
     sample,
   };
+}
+
+function changedPath(line: string) {
+  const raw = line.slice(3);
+  return raw.includes(" -> ") ? raw.split(" -> ").at(-1)! : raw;
+}
+
+function lastEdited(repo: string, changes: string[]): Pick<RepoState, "lastEditedAt" | "lastEditedPath"> {
+  let newest = 0;
+  let newestPath: string | null = null;
+  for (const line of changes) {
+    const path = changedPath(line);
+    const fullPath = join(repo, path);
+    try {
+      const mtime = statSync(fullPath).mtimeMs;
+      if (mtime > newest) {
+        newest = mtime;
+        newestPath = path;
+      }
+    } catch {
+      // Deleted files do not have a filesystem mtime; they are still dirty but
+      // should not win the active-focus signal over files edited on disk.
+    }
+  }
+  return {
+    lastEditedAt: newest ? new Date(newest).toISOString() : null,
+    lastEditedPath: newestPath,
+  };
+}
+
+function focusScore(dirty: number, attention: RepoState["attention"], lastEditedAt: string | null) {
+  if (!dirty || !lastEditedAt || attention === "noise") return 0;
+  const ageMinutes = Math.max(0, (Date.now() - Date.parse(lastEditedAt)) / 60000);
+  const recency = Math.max(0, 100 - ageMinutes);
+  const attentionBoost = { high: 30, medium: 20, low: 10, clean: 0, noise: 0 }[attention];
+  return Math.round(recency + attentionBoost);
 }
 
 function classify(changes: string[]): Pick<RepoState, "attention" | "noiseReason"> {
@@ -110,7 +152,7 @@ export function scanGitObserver() {
   const repos = findRepos(ROOT)
     .sort((a, b) => relative(ROOT, a).localeCompare(relative(ROOT, b)))
     .map(summarize)
-    .sort((a, b) => attentionRank(b) - attentionRank(a) || b.dirty - a.dirty || a.path.localeCompare(b.path));
+    .sort((a, b) => b.focusScore - a.focusScore || attentionRank(b) - attentionRank(a) || b.dirty - a.dirty || a.path.localeCompare(b.path));
   const state: ObserverState = {
     generatedAt: new Date().toISOString(),
     root: ROOT,
@@ -119,6 +161,7 @@ export function scanGitObserver() {
     dirtyCount: repos.filter((repo) => repo.dirty > 0).length,
     attentionCount: repos.filter((repo) => ["medium", "high"].includes(repo.attention)).length,
     noiseCount: repos.filter((repo) => repo.attention === "noise").length,
+    focus: repos.filter((repo) => repo.focusScore > 0).slice(0, 5),
     aheadCount: repos.filter((repo) => repo.ahead > 0).length,
     behindCount: repos.filter((repo) => repo.behind > 0).length,
     delta: diff(previous, repos),
