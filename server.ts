@@ -38,6 +38,7 @@ const projectPaths: Record<string, string> = {
   "contributron": join(ROOT, "contributron"),
   "hermes": join(ROOT, "hermes"),
   "t2t": join(ROOT, "t2t"),
+  "mcpu": join(ROOT, "mcpu"),
   "coey.dev": join(ROOT, "coey.dev"),
   ".context rig": ROOT,
 };
