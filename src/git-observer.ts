@@ -19,6 +19,8 @@ type RepoState = {
   untracked: number;
   ahead: number;
   behind: number;
+  attention: "clean" | "low" | "medium" | "high" | "noise";
+  noiseReason: string | null;
   sample: string[];
 };
 
@@ -72,6 +74,7 @@ function summarize(repo: string): RepoState {
   const ahead = Number(branchLine.match(/ahead (\d+)/)?.[1] ?? 0);
   const behind = Number(branchLine.match(/behind (\d+)/)?.[1] ?? 0);
   const head = git(repo, ["rev-parse", "--short", "HEAD"]).stdout.trim() || "unknown";
+  const classification = classify(changes);
   return {
     path: relative(ROOT, repo) || ".",
     branch,
@@ -82,8 +85,22 @@ function summarize(repo: string): RepoState {
     untracked: changes.filter((line) => line.startsWith("??")).length,
     ahead,
     behind,
+    ...classification,
     sample,
   };
+}
+
+function classify(changes: string[]): Pick<RepoState, "attention" | "noiseReason"> {
+  if (changes.length === 0) return { attention: "clean", noiseReason: null };
+  const paths = changes.map((line) => line.slice(3));
+  const nodeModules = paths.filter((path) => path.includes("node_modules/")).length;
+  const generated = paths.filter((path) => /(^|\/)(dist|build|\.svelte-kit|\.next|coverage)\//.test(path)).length;
+  const dsStore = paths.filter((path) => path.endsWith(".DS_Store")).length;
+  if (nodeModules / changes.length > 0.6) return { attention: "noise", noiseReason: "mostly node_modules" };
+  if ((generated + dsStore) / changes.length > 0.6) return { attention: "noise", noiseReason: "mostly generated files" };
+  if (changes.length > 100) return { attention: "high", noiseReason: null };
+  if (changes.length > 10) return { attention: "medium", noiseReason: null };
+  return { attention: "low", noiseReason: null };
 }
 
 export function scanGitObserver() {
@@ -92,13 +109,16 @@ export function scanGitObserver() {
   const previous = readPrevious();
   const repos = findRepos(ROOT)
     .sort((a, b) => relative(ROOT, a).localeCompare(relative(ROOT, b)))
-    .map(summarize);
+    .map(summarize)
+    .sort((a, b) => attentionRank(b) - attentionRank(a) || b.dirty - a.dirty || a.path.localeCompare(b.path));
   const state: ObserverState = {
     generatedAt: new Date().toISOString(),
     root: ROOT,
     mode: ".git observer",
     repoCount: repos.length,
     dirtyCount: repos.filter((repo) => repo.dirty > 0).length,
+    attentionCount: repos.filter((repo) => ["medium", "high"].includes(repo.attention)).length,
+    noiseCount: repos.filter((repo) => repo.attention === "noise").length,
     aheadCount: repos.filter((repo) => repo.ahead > 0).length,
     behindCount: repos.filter((repo) => repo.behind > 0).length,
     delta: diff(previous, repos),
@@ -107,6 +127,10 @@ export function scanGitObserver() {
   writeFileSync(OUT, JSON.stringify(state, null, 2) + "\n");
   writeFileSync(join(HISTORY_DIR, `${state.generatedAt.replace(/[:.]/g, "-")}.json`), JSON.stringify(state, null, 2) + "\n");
   return state;
+}
+
+function attentionRank(repo: RepoState) {
+  return { high: 5, medium: 4, low: 3, noise: 2, clean: 1 }[repo.attention];
 }
 
 function readPrevious(): ObserverState | null {

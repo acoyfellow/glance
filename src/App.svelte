@@ -1,8 +1,8 @@
 <script lang="ts">
   type Lane = { name:string; state:string; risk:string; why:string; finding:string; next:string; source:string };
   type Worker = { name:string; status:string; session:number; max_sessions:number; question?:string; controllerAlive?:boolean; currentActivity?:string };
-  type GitRepo = { path:string; branch:string; head:string; dirty:number; staged:number; unstaged:number; untracked:number; ahead:number; behind:number; sample:string[] };
-  type GitObserver = { generatedAt:string|null; repoCount:number; dirtyCount:number; aheadCount:number; behindCount:number; repos:GitRepo[] };
+  type GitRepo = { path:string; branch:string; head:string; dirty:number; staged:number; unstaged:number; untracked:number; ahead:number; behind:number; attention:string; noiseReason:string|null; sample:string[] };
+  type GitObserver = { generatedAt:string|null; repoCount:number; dirtyCount:number; attentionCount:number; noiseCount:number; aheadCount:number; behindCount:number; repos:GitRepo[]; delta?: any };
   type Dash = { generatedAt:string; workers:Worker[]; activeWorkers:Worker[]; machine:{ worker:string; state:any; controllerAlive:boolean; lastPing:string|null; pings:string[]}; gitObserver:GitObserver; lanes:(Lane & { activeNow?: boolean })[]; events:any[]; recentRuns:any[] };
   let data: Dash | null = null;
   let connected = false;
@@ -134,7 +134,8 @@
       </div>
       <div class="readout">
         <div><span>Repos</span><b>{data.gitObserver?.repoCount || 0}</b></div>
-        <div><span>Dirty</span><b>{data.gitObserver?.dirtyCount || 0}</b></div>
+        <div><span>Attention</span><b>{data.gitObserver?.attentionCount || 0}</b></div>
+        <div><span>Noise</span><b>{data.gitObserver?.noiseCount || 0}</b></div>
         <div><span>Updated</span><b>{data.gitObserver?.generatedAt ? new Date(data.gitObserver.generatedAt).toLocaleTimeString() : 'never'}</b></div>
       </div>
       <div class="actions throttle">
@@ -166,10 +167,10 @@
       <div class="instrument-head"><span>Git Radar</span><span class="muted">{data.gitObserver?.repoCount || 0} repos</span></div>
       <div class="lane-grid">
         {#each dirtyRepos as repo (repo.path)}
-          <button class="lane-tile {repo.dirty > 100 ? 'critical' : repo.dirty > 10 ? 'medium' : 'low'} active-lane" on:click={() => drawer = 'git'}>
+          <button class="lane-tile {repo.attention === 'high' ? 'critical' : repo.attention} active-lane" on:click={() => drawer = 'git'}>
             <span>{repo.branch}</span>
             <b>{repo.path}</b>
-            <small>{repo.dirty} dirty</small>
+            <small>{repo.noiseReason || `${repo.dirty} dirty`}</small>
           </button>
         {/each}
         {#each (data.gitObserver?.repos || []).filter((repo) => repo.dirty === 0).slice(0, Math.max(0, 16 - dirtyRepos.length)) as repo (repo.path)}
@@ -231,6 +232,8 @@
         <div class="drawer-grid">
           <div><span>Repos</span><b>{data.gitObserver?.repoCount || 0}</b></div>
           <div><span>Dirty</span><b>{data.gitObserver?.dirtyCount || 0}</b></div>
+          <div><span>Attention</span><b>{data.gitObserver?.attentionCount || 0}</b></div>
+          <div><span>Noise</span><b>{data.gitObserver?.noiseCount || 0}</b></div>
           <div><span>Ahead</span><b>{data.gitObserver?.aheadCount || 0}</b></div>
           <div><span>Behind</span><b>{data.gitObserver?.behindCount || 0}</b></div>
           <div><span>Updated</span><b>{data.gitObserver?.generatedAt ? new Date(data.gitObserver.generatedAt).toLocaleString() : 'never'}</b></div>
@@ -239,7 +242,7 @@
           {#each data.gitObserver?.repos || [] as repo (repo.path)}
             <div class="drawer-row">
               <b>{repo.path}</b>
-              <span>{repo.branch} · {repo.head} · {repo.dirty ? `${repo.dirty} dirty` : 'clean'}</span>
+              <span>{repo.branch} · {repo.head} · {repo.attention} · {repo.dirty ? `${repo.dirty} dirty` : 'clean'}{repo.noiseReason ? ` · ${repo.noiseReason}` : ''}</span>
               {#if repo.sample?.length}<p>{repo.sample.join('\\n')}</p>{/if}
             </div>
           {/each}
