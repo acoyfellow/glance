@@ -12,6 +12,7 @@
   let answers: Record<string, string> = {};
   let actionStatus: Record<string, string> = {};
   let selectedLane: (Lane & { activeNow?: boolean }) | null = null;
+  let selectedRepo: GitRepo | null = null;
   let drawer: 'lane' | 'git' | 'receipts' | 'workers' | 'events' | null = null;
   $: workRunning = Boolean(data?.machine.controllerAlive && String(data?.machine.state?.status || '').includes('running'));
   $: observeOn = connected;
@@ -59,9 +60,27 @@
     selectedLane = lane;
     drawer = 'lane';
   }
+  function inspectRepo(repo: GitRepo) {
+    selectedRepo = repo;
+    drawer = 'git';
+  }
   function closeDrawer() {
     drawer = null;
     selectedLane = null;
+    selectedRepo = null;
+  }
+  async function copyRepoBrief(repo: GitRepo) {
+    actionStatus[repo.path] = 'Generating work brief...';
+    const res = await fetch('/api/repo-brief', { method: 'POST', headers: { 'content-type': 'application/json', 'x-machine-token': token }, body: JSON.stringify({ repo: repo.path }) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) { actionStatus[repo.path] = `Failed: ${res.status} ${body.error || ''}`; return; }
+    try {
+      await navigator.clipboard.writeText(body.prompt);
+      actionStatus[repo.path] = 'Copied Observe-based work brief.';
+    } catch {
+      actionStatus[repo.path] = 'Copy failed. Brief printed to console.';
+      console.log(body.prompt);
+    }
   }
 
   const escClass = (s:string) => String(s||'').replace(/[^a-z0-9_-]/gi,'').toLowerCase();
@@ -167,14 +186,14 @@
       <div class="instrument-head"><span>Git Radar</span><span class="muted">{data.gitObserver?.repoCount || 0} repos</span></div>
       <div class="lane-grid">
         {#each dirtyRepos as repo (repo.path)}
-          <button class="lane-tile {repo.attention === 'high' ? 'critical' : repo.attention} active-lane" on:click={() => drawer = 'git'}>
+          <button class="lane-tile {repo.attention === 'high' ? 'critical' : repo.attention} active-lane" on:click={() => inspectRepo(repo)}>
             <span>{repo.branch}</span>
             <b>{repo.path}</b>
             <small>{repo.noiseReason || `${repo.dirty} dirty`}</small>
           </button>
         {/each}
         {#each (data.gitObserver?.repos || []).filter((repo) => repo.dirty === 0).slice(0, Math.max(0, 16 - dirtyRepos.length)) as repo (repo.path)}
-          <button class="lane-tile low" on:click={() => drawer = 'git'}>
+          <button class="lane-tile low" on:click={() => inspectRepo(repo)}>
             <span>{repo.branch}</span>
             <b>{repo.path}</b>
             <small>clean</small>
@@ -214,7 +233,7 @@
     <button class="drawer-backdrop" aria-label="Close drawer" on:click={closeDrawer}></button>
     <aside class="drawer" aria-live="polite">
       <div class="drawer-head">
-        <b>{drawer === 'lane' ? selectedLane?.name : drawer === 'git' ? '.git observer' : drawer}</b>
+        <b>{drawer === 'lane' ? selectedLane?.name : drawer === 'git' ? selectedRepo?.path || '.git observer' : drawer}</b>
         <button class="micro" on:click={closeDrawer}>Close</button>
       </div>
       {#if drawer === 'lane' && selectedLane}
@@ -238,6 +257,12 @@
           <div><span>Behind</span><b>{data.gitObserver?.behindCount || 0}</b></div>
           <div><span>Updated</span><b>{data.gitObserver?.generatedAt ? new Date(data.gitObserver.generatedAt).toLocaleString() : 'never'}</b></div>
         </div>
+        {#if selectedRepo}
+          <div class="drawer-block"><span>Selected repo</span><p>{selectedRepo.branch} · {selectedRepo.head} · {selectedRepo.attention} · {selectedRepo.dirty ? `${selectedRepo.dirty} dirty` : 'clean'}{selectedRepo.noiseReason ? ` · ${selectedRepo.noiseReason}` : ''}</p></div>
+          {#if selectedRepo.sample?.length}<pre>{selectedRepo.sample.join('\\n')}</pre>{/if}
+          <button on:click={() => copyRepoBrief(selectedRepo!)}>Copy Observe Work Brief</button>
+          {#if actionStatus[selectedRepo.path]}<div class="feedback">{actionStatus[selectedRepo.path]}</div>{/if}
+        {/if}
         <div class="drawer-list">
           {#each data.gitObserver?.repos || [] as repo (repo.path)}
             <div class="drawer-row">

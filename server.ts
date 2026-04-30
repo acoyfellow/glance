@@ -136,6 +136,54 @@ ${recentRunsBlock}
 `;
 }
 
+function generateRepoBrief(repoPath: string): string {
+  const dash = JSON.parse(readFileSync(join(DIR, "dashboard.json"), "utf8"));
+  const observer = dash.gitObserver;
+  const repo = (observer.repos || []).find((item: any) => item.path === repoPath);
+  if (!repo) throw new Error("unknown repo");
+  const delta = observer.delta || {};
+  const relatedDelta = [
+    ...(delta.newDirty || []).includes(repo.path) ? [`newly dirty: ${repo.path}`] : [],
+    ...(delta.cleaned || []).includes(repo.path) ? [`cleaned: ${repo.path}`] : [],
+    ...(delta.branchChanged || []).filter((item: any) => item.path === repo.path).map((item: any) => `branch changed: ${item.from} -> ${item.to}`),
+    ...(delta.headChanged || []).filter((item: any) => item.path === repo.path).map((item: any) => `head changed: ${item.from} -> ${item.to}`),
+    ...(delta.dirtyChanged || []).filter((item: any) => item.path === repo.path).map((item: any) => `dirty count changed: ${item.from} -> ${item.to}`),
+  ];
+  return `You are starting work from the Machine Observe loop.
+
+## Repo
+
+Path: ${join(ROOT, repo.path)}
+Branch: ${repo.branch}
+Head: ${repo.head}
+Attention: ${repo.attention}
+Dirty files: ${repo.dirty}
+Staged: ${repo.staged}
+Unstaged: ${repo.unstaged}
+Untracked: ${repo.untracked}
+Ahead/behind: ${repo.ahead}/${repo.behind}
+Noise: ${repo.noiseReason || "none"}
+
+## Observe delta
+
+Previous scan: ${observer.delta?.previousAt || "none"}
+${relatedDelta.length ? relatedDelta.map((line) => `- ${line}`).join("\n") : "- No repo-specific delta since previous scan."}
+
+## Git sample
+
+\`\`\`
+${(repo.sample || []).join("\n") || "clean"}
+\`\`\`
+
+## Rules
+
+- Treat this Observe state as the source of truth before acting.
+- Inspect the repo before editing.
+- Do not deploy, push, pull, fetch, or mutate external services unless Jordan explicitly asks.
+- End with DONE, HANDOFF, QUESTION, or BLOCKED.
+`;
+}
+
 function allowed(req: Request) {
   const host = req.headers.get("host") ?? "";
   const origin = req.headers.get("origin");
@@ -195,6 +243,18 @@ Bun.serve({
       const prompt = generatePrompt(project, projectPath);
       emit("dashboard.prompt", { project, promptChars: prompt.length });
       return new Response(JSON.stringify({ project, prompt }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    }
+    if (url.pathname === "/api/repo-brief") {
+      if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
+      if (!authed(req)) return new Response("unauthorized", { status: 401 });
+      const body = await req.json().catch(() => ({})) as any;
+      try {
+        const prompt = generateRepoBrief(String(body.repo ?? ""));
+        emit("dashboard.repo_brief", { repo: String(body.repo ?? ""), promptChars: prompt.length });
+        return new Response(JSON.stringify({ repo: body.repo, prompt }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+      } catch (err: any) {
+        return new Response(JSON.stringify({ error: err.message || "failed" }), { status: 400, headers: { "content-type": "application/json" } });
+      }
     }
     if (url.pathname === "/api/machine/action") {
       if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
