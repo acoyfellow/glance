@@ -1,0 +1,17 @@
+{
+  "name": "machine-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "server": "bun run server.ts"
+  },
+  "dependencies": {
+    "@sveltejs/vite-plugin-svelte": "latest",
+    "vite": "latest",
+    "svelte": "latest",
+    "typescript": "latest"
+  },
+  "devDependencies": {}
+}

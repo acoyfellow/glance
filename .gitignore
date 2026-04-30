@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dashboard.json
+dashboard.html
+public/
+token
+.DS_Store
+data/git-observer/*.json
+data/git-observer/history/*.json
