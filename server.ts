@@ -166,7 +166,7 @@ function readStatic(pathname: string) {
   return { p, data: readFileSync(p) };
 }
 
-for (const p of [join(ROOT, ".context/workers"), join(ROOT, ".context/runs"), join(ROOT, ".context/git-observer"), DIR]) {
+for (const p of [join(ROOT, ".context/workers"), join(ROOT, ".context/runs"), join(DIR, "data/git-observer"), DIR]) {
   try { watch(p, { recursive: true }, schedule); } catch {}
 }
 rebuild();

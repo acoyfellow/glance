@@ -2,6 +2,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { scanGitObserver } from "./src/git-observer";
 
 const ROOT = process.env.MACHINE_ROOT ?? "/Users/jcoeyman/cloudflare";
 const CTX = join(ROOT, ".context");
@@ -9,7 +10,6 @@ const WORKERS = join(CTX, "workers");
 const RUNS = join(CTX, "runs");
 const OUT = join(CTX, "machine-dashboard", "dashboard.json");
 const EVENTS = join(CTX, "events.jsonl");
-const GIT_OBSERVER = join(CTX, "git-observer", "state.json");
 const workerName = process.env.MACHINE_DEFAULT ?? "portfolio-loop";
 
 const lanes: Record<string, any> = {
@@ -66,8 +66,7 @@ for (const f of runFiles.slice().reverse()) {
 }
 
 const events = readEvents(160);
-spawnSync(join(CTX, "bin/git-observe"), [], { cwd: ROOT, env: process.env, encoding: "utf8", timeout: 20000 });
-const gitObserver = readJson(GIT_OBSERVER) ?? { generatedAt: null, repoCount: 0, dirtyCount: 0, aheadCount: 0, behindCount: 0, repos: [] };
+const gitObserver = scanGitObserver();
 // NOTE: activeNow / "WORKING" column was removed because scanning event text for
 // project name mentions is too brittle. A durable "current focus" signal will be
 // added later (e.g. worker objective, explicit user toggle, or lane heartbeat).
