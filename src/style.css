@@ -307,6 +307,26 @@ pre { white-space: pre-wrap; background: #ffffff; border: 1px solid var(--line);
 .drawer-row b { display: block; margin-bottom: 3px; }
 .drawer-row span { color: var(--muted); }
 .drawer-row p { margin: 6px 0 0; color: #1f2933; overflow-wrap: anywhere; }
+.delta-board {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin-top: 7px;
+}
+.delta-board div {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  border-radius: 5px;
+  padding: 7px;
+}
+.delta-board b {
+  display: block;
+  font-size: 18px;
+}
+.delta-board small {
+  color: var(--muted);
+  text-transform: uppercase;
+}
 
 .ok { color: var(--green); }
 .bad { color: var(--red); }

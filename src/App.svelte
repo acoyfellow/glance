@@ -20,6 +20,11 @@
   $: observeState = observeOn ? 'On' : 'Off';
   $: dirtyRepos = data?.gitObserver?.repos?.filter((repo) => repo.dirty > 0) || [];
   $: lastEvent = [...(data?.events || [])].reverse()[0];
+  $: deltaCount = (data?.gitObserver?.delta?.newDirty?.length || 0)
+    + (data?.gitObserver?.delta?.cleaned?.length || 0)
+    + (data?.gitObserver?.delta?.branchChanged?.length || 0)
+    + (data?.gitObserver?.delta?.headChanged?.length || 0)
+    + (data?.gitObserver?.delta?.dirtyChanged?.length || 0);
   fetch('/api/token').then(r => r.json()).then(j => token = j.token).catch(() => {});
   async function action(name: 'start' | 'stop' | 'kill', worker = 'portfolio-loop') {
     if (name === 'kill' && !confirm(`Kill ${worker} now?`)) return;
@@ -155,6 +160,7 @@
         <div><span>Repos</span><b>{data.gitObserver?.repoCount || 0}</b></div>
         <div><span>Attention</span><b>{data.gitObserver?.attentionCount || 0}</b></div>
         <div><span>Noise</span><b>{data.gitObserver?.noiseCount || 0}</b></div>
+        <div><span>Delta</span><b>{deltaCount}</b></div>
         <div><span>Updated</span><b>{data.gitObserver?.generatedAt ? new Date(data.gitObserver.generatedAt).toLocaleTimeString() : 'never'}</b></div>
       </div>
       <div class="actions throttle">
@@ -257,6 +263,28 @@
           <div><span>Behind</span><b>{data.gitObserver?.behindCount || 0}</b></div>
           <div><span>Updated</span><b>{data.gitObserver?.generatedAt ? new Date(data.gitObserver.generatedAt).toLocaleString() : 'never'}</b></div>
         </div>
+        <div class="drawer-block">
+          <span>Since previous scan</span>
+          <div class="delta-board">
+            <div><b>{data.gitObserver?.delta?.newDirty?.length || 0}</b><small>new dirty</small></div>
+            <div><b>{data.gitObserver?.delta?.cleaned?.length || 0}</b><small>cleaned</small></div>
+            <div><b>{data.gitObserver?.delta?.branchChanged?.length || 0}</b><small>branch</small></div>
+            <div><b>{data.gitObserver?.delta?.headChanged?.length || 0}</b><small>head</small></div>
+            <div><b>{data.gitObserver?.delta?.dirtyChanged?.length || 0}</b><small>dirty count</small></div>
+          </div>
+        </div>
+        {#if deltaCount}
+          <div class="drawer-block">
+            <span>Delta details</span>
+            <pre>{[
+              ...(data.gitObserver?.delta?.newDirty || []).map((path:string) => `new dirty: ${path}`),
+              ...(data.gitObserver?.delta?.cleaned || []).map((path:string) => `cleaned: ${path}`),
+              ...(data.gitObserver?.delta?.branchChanged || []).map((item:any) => `branch: ${item.path} ${item.from} -> ${item.to}`),
+              ...(data.gitObserver?.delta?.headChanged || []).map((item:any) => `head: ${item.path} ${item.from} -> ${item.to}`),
+              ...(data.gitObserver?.delta?.dirtyChanged || []).map((item:any) => `dirty: ${item.path} ${item.from} -> ${item.to}`)
+            ].join('\\n')}</pre>
+          </div>
+        {/if}
         {#if selectedRepo}
           <div class="drawer-block"><span>Selected repo</span><p>{selectedRepo.branch} · {selectedRepo.head} · {selectedRepo.attention} · {selectedRepo.dirty ? `${selectedRepo.dirty} dirty` : 'clean'}{selectedRepo.noiseReason ? ` · ${selectedRepo.noiseReason}` : ''}</p></div>
           {#if selectedRepo.sample?.length}<pre>{selectedRepo.sample.join('\\n')}</pre>{/if}
