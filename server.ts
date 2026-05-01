@@ -261,7 +261,7 @@ function recentFilesJsonString() {
   return activityCache;
 }
 function broadcastActivity() {
-  const data = `event: activity\ndata: ${recentFilesJsonString()}\n\n`;
+  const data = `event: activity\ndata: ${JSON.stringify(JSON.parse(recentFilesJsonString()))}\n\n`;
   for (const controller of activityClients) {
     try { controller.enqueue(data); } catch { activityClients.delete(controller); }
   }
@@ -274,7 +274,7 @@ function watchHtml() {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Machine File Watch</title>
   <style>
-    :root { color-scheme: light; --bg:#f4f6f8; --paper:#fff; --line:#d7dee5; --text:#1f2933; --muted:#667085; --hot:#155eef; }
+    :root { color-scheme: light; --bg:#f4f6f8; --paper:#fff; --line:#d7dee5; --text:#1f2933; --muted:#667085; --hot:#155eef; --glow:#d7f7ea; }
     * { box-sizing:border-box; }
     body { margin:0; background:var(--bg); color:var(--text); font:13px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { padding:14px; }
@@ -283,9 +283,23 @@ function watchHtml() {
     th, td { padding:7px 9px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
     th { position:sticky; top:0; background:#f9fafb; z-index:1; color:var(--muted); font-size:11px; text-transform:uppercase; }
     tr.hot td:first-child { border-left:3px solid var(--hot); }
+    tr.pulse { animation:file-pulse 1200ms ease-out both; }
+    tr.pulse td { animation:cell-pulse 1200ms ease-out both; }
     .path { font-weight:750; overflow-wrap:anywhere; }
     .muted { color:var(--muted); }
     .age { white-space:nowrap; font-variant-numeric:tabular-nums; }
+    @keyframes file-pulse {
+      0% { transform:translateY(-1px); }
+      35% { transform:translateY(0); }
+      100% { transform:translateY(0); }
+    }
+    @keyframes cell-pulse {
+      0% { background:var(--glow); }
+      100% { background:transparent; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      tr.pulse, tr.pulse td { animation:none; }
+    }
   </style>
 </head>
 <body>
@@ -298,6 +312,52 @@ function watchHtml() {
   </main>
   <script>
     const fmt = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+    const seen = new Map();
+    let firstRender = true;
+    let audio;
+    let lastChime = 0;
+    function audioContext() {
+      if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+      return audio;
+    }
+    async function wakeAudio() {
+      try {
+        const ctx = audioContext();
+        if (ctx.state !== "running") await ctx.resume();
+      } catch {}
+    }
+    addEventListener("pointerdown", wakeAudio, { once: true });
+    addEventListener("keydown", wakeAudio, { once: true });
+    function chime(strength) {
+      if (firstRender || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      const now = Date.now();
+      if (now - lastChime < 700) return;
+      lastChime = now;
+      try {
+        const ctx = audioContext();
+        if (ctx.state !== "running") return;
+        const gain = ctx.createGain();
+        const osc = ctx.createOscillator();
+        const extra = ctx.createOscillator();
+        const t = ctx.currentTime;
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(Math.min(0.035, 0.014 + strength * 0.004), t + 0.018);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+        osc.frequency.setValueAtTime(880, t);
+        osc.frequency.exponentialRampToValueAtTime(1244, t + 0.08);
+        extra.frequency.setValueAtTime(1320, t + 0.025);
+        osc.type = "sine";
+        extra.type = "triangle";
+        extra.detune.setValueAtTime(-7, t);
+        osc.connect(gain);
+        extra.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t);
+        extra.start(t + 0.02);
+        osc.stop(t + 0.18);
+        extra.stop(t + 0.14);
+      } catch {}
+    }
     function age(ms) {
       const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
       if (s < 60) return s + "s";
@@ -307,12 +367,20 @@ function watchHtml() {
       return h + "h";
     }
     async function render(data) {
+      const changed = new Set();
+      for (const file of data.files) {
+        const previous = seen.get(file.path);
+        if (!firstRender && previous !== undefined && previous !== file.mtimeIso) changed.add(file.path);
+        seen.set(file.path, file.mtimeIso);
+      }
+      if (changed.size) chime(changed.size);
       document.getElementById("count").textContent = data.files.length + " recent files";
       document.getElementById("updated").textContent = fmt.format(new Date(data.generatedAt));
       document.getElementById("files").innerHTML = data.files.map((file, i) => {
         const ms = Date.parse(file.mtimeIso);
-        return '<tr class="' + (i < 8 ? 'hot' : '') + '"><td class="age">' + age(ms) + ' ago<br><span class="muted">' + fmt.format(new Date(ms)) + '</span></td><td class="path">' + file.path + '</td><td class="muted">' + Math.round(file.size / 1024) + ' KB</td></tr>';
+        return '<tr class="' + (i < 8 ? 'hot ' : '') + (changed.has(file.path) ? 'pulse' : '') + '"><td class="age">' + age(ms) + ' ago<br><span class="muted">' + fmt.format(new Date(ms)) + '</span></td><td class="path">' + file.path + '</td><td class="muted">' + Math.round(file.size / 1024) + ' KB</td></tr>';
       }).join("");
+      firstRender = false;
     }
     async function tick() {
       const res = await fetch("/api/recent-files", { cache: "no-store" });
@@ -370,7 +438,7 @@ Bun.serve({
         start(controller) {
           activityController = controller;
           activityClients.add(controller);
-          controller.enqueue(`event: activity\ndata: ${recentFilesJsonString()}\n\n`);
+          controller.enqueue(`event: activity\ndata: ${JSON.stringify(JSON.parse(recentFilesJsonString()))}\n\n`);
         },
         cancel() {
           if (activityController) activityClients.delete(activityController);
