@@ -328,7 +328,31 @@ function watchHtml() {
     }
     addEventListener("pointerdown", wakeAudio, { once: true });
     addEventListener("keydown", wakeAudio, { once: true });
-    function chime(strength) {
+    function repoName(path) {
+      if (path.startsWith(".context/")) return ".context";
+      return path.split("/")[0] || "root";
+    }
+    function hashText(text) {
+      let hash = 2166136261;
+      for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    }
+    function repoTone(repo) {
+      const hash = hashText(repo);
+      const scale = [0, 2, 4, 7, 9, 12];
+      const base = 740 * Math.pow(2, scale[hash % scale.length] / 12);
+      return {
+        base,
+        high: base * (1.25 + ((hash >>> 4) % 5) * 0.025),
+        overtone: base * (1.48 + ((hash >>> 9) % 6) * 0.018),
+        detune: -10 + ((hash >>> 15) % 21),
+        wave: (hash & 1) ? "triangle" : "sine",
+      };
+    }
+    function chime(repo, strength) {
       if (firstRender || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
       const now = Date.now();
       if (now - lastChime < 700) return;
@@ -336,6 +360,7 @@ function watchHtml() {
       try {
         const ctx = audioContext();
         if (ctx.state !== "running") return;
+        const tone = repoTone(repo);
         const gain = ctx.createGain();
         const osc = ctx.createOscillator();
         const extra = ctx.createOscillator();
@@ -343,12 +368,12 @@ function watchHtml() {
         gain.gain.setValueAtTime(0.0001, t);
         gain.gain.exponentialRampToValueAtTime(Math.min(0.035, 0.014 + strength * 0.004), t + 0.018);
         gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-        osc.frequency.setValueAtTime(880, t);
-        osc.frequency.exponentialRampToValueAtTime(1244, t + 0.08);
-        extra.frequency.setValueAtTime(1320, t + 0.025);
+        osc.frequency.setValueAtTime(tone.base, t);
+        osc.frequency.exponentialRampToValueAtTime(tone.high, t + 0.08);
+        extra.frequency.setValueAtTime(tone.overtone, t + 0.025);
         osc.type = "sine";
-        extra.type = "triangle";
-        extra.detune.setValueAtTime(-7, t);
+        extra.type = tone.wave;
+        extra.detune.setValueAtTime(tone.detune, t);
         osc.connect(gain);
         extra.connect(gain);
         gain.connect(ctx.destination);
@@ -368,12 +393,16 @@ function watchHtml() {
     }
     async function render(data) {
       const changed = new Set();
+      let changedRepo = "";
       for (const file of data.files) {
         const previous = seen.get(file.path);
-        if (!firstRender && previous !== undefined && previous !== file.mtimeIso) changed.add(file.path);
+        if (!firstRender && previous !== undefined && previous !== file.mtimeIso) {
+          changed.add(file.path);
+          if (!changedRepo) changedRepo = repoName(file.path);
+        }
         seen.set(file.path, file.mtimeIso);
       }
-      if (changed.size) chime(changed.size);
+      if (changed.size) chime(changedRepo, changed.size);
       document.getElementById("count").textContent = data.files.length + " recent files";
       document.getElementById("updated").textContent = fmt.format(new Date(data.generatedAt));
       document.getElementById("files").innerHTML = data.files.map((file, i) => {
