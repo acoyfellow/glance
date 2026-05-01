@@ -10,6 +10,7 @@ const PORT = Number(process.env.MACHINE_DASHBOARD_PORT ?? 8787);
 const HOST = "127.0.0.1";
 const builder = join(DIR, "build-dashboard.ts");
 const clients = new Set<ServerWebSocket<unknown>>();
+const activityClients = new Set<ReadableStreamDefaultController>();
 let lastState = "{}";
 let timer: Timer | null = null;
 let lastBroadcast = "";
@@ -203,41 +204,67 @@ function rebuild() {
 }
 function schedule() { if (timer) clearTimeout(timer); timer = setTimeout(rebuild, 120); }
 function type(path: string) { return path.endsWith(".html") ? "text/html; charset=utf-8" : path.endsWith(".js") ? "text/javascript; charset=utf-8" : path.endsWith(".css") ? "text/css; charset=utf-8" : path.endsWith(".json") ? "application/json; charset=utf-8" : "text/plain; charset=utf-8"; }
-const recentFileIgnoreDirs = new Set([".git", "node_modules", "dist", "build", ".next", ".svelte-kit", ".wrangler", ".turbo", "coverage"]);
+const recentFileIgnoreDirs = new Set([".git", "node_modules", "dist", "build", ".next", ".svelte-kit", ".wrangler", ".turbo", ".alchemy", "coverage"]);
 const recentFileIgnoreFiles = new Set([".DS_Store", "dashboard.json"]);
 const recentFileIgnorePathParts = [
   ".context/machine-dashboard/data/",
   ".context/machine-dashboard/dist/",
   ".context/machine-dashboard/public/",
+  ".context/machine-dashboard/dashboard.json",
+  ".context/machine-dashboard/dashboard.html",
 ];
-function recentFiles(dir = ROOT, out: any[] = [], depth = 0) {
-  if (depth > 6 || out.length > 2500) return out;
+type ActivityFile = { path: string; mtime: number; mtimeIso: string; size: number };
+const activityByPath = new Map<string, ActivityFile>();
+let activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root: ROOT, files: [] });
+let activityDirty = true;
+function shouldIgnoreRecentPath(relPath: string, name = relPath.split("/").at(-1) || relPath) {
+  if (recentFileIgnoreFiles.has(name)) return true;
+  if (recentFileIgnorePathParts.some((part) => relPath.startsWith(part))) return true;
+  return relPath.split("/").some((part) => recentFileIgnoreDirs.has(part));
+}
+function indexRecentFiles(dir = ROOT, depth = 0) {
+  if (depth > 8) return;
   let entries: ReturnType<typeof readdirSync> = [];
-  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const ent of entries) {
-    if (recentFileIgnoreFiles.has(ent.name)) continue;
     const path = join(dir, ent.name);
     const relPath = relative(ROOT, path);
-    if (recentFileIgnorePathParts.some((part) => relPath.startsWith(part))) continue;
+    if (shouldIgnoreRecentPath(relPath, ent.name)) continue;
     if (ent.isDirectory()) {
-      if (recentFileIgnoreDirs.has(ent.name)) continue;
-      recentFiles(path, out, depth + 1);
+      indexRecentFiles(path, depth + 1);
       continue;
     }
     if (!ent.isFile()) continue;
-    try {
-      const st = statSync(path);
-      out.push({ path: relative(ROOT, path), mtime: st.mtimeMs, size: st.size });
-    } catch {}
+    indexOneFile(path, false);
   }
-  return out;
 }
-function recentFilesJson() {
-  const files = recentFiles()
+function indexOneFile(path: string, notify = true) {
+  const relPath = relative(ROOT, path);
+  if (!relPath || relPath.startsWith("..") || shouldIgnoreRecentPath(relPath)) return;
+  try {
+    const st = statSync(path);
+    if (!st.isFile()) return;
+    activityByPath.set(relPath, { path: relPath, mtime: st.mtimeMs, mtimeIso: new Date(st.mtimeMs).toISOString(), size: st.size });
+  } catch {
+    activityByPath.delete(relPath);
+  }
+  activityDirty = true;
+  if (notify) broadcastActivity();
+}
+function recentFilesJsonString() {
+  if (!activityDirty) return activityCache;
+  const files = [...activityByPath.values()]
     .sort((a, b) => b.mtime - a.mtime)
-    .slice(0, 160)
-    .map((file) => ({ ...file, mtimeIso: new Date(file.mtime).toISOString() }));
-  return { generatedAt: new Date().toISOString(), root: ROOT, files };
+    .slice(0, 240);
+  activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root: ROOT, files }, null, 2);
+  activityDirty = false;
+  return activityCache;
+}
+function broadcastActivity() {
+  const data = `event: activity\ndata: ${recentFilesJsonString()}\n\n`;
+  for (const controller of activityClients) {
+    try { controller.enqueue(data); } catch { activityClients.delete(controller); }
+  }
 }
 function watchHtml() {
   return `<!doctype html>
@@ -279,9 +306,7 @@ function watchHtml() {
       const h = Math.round(m / 60);
       return h + "h";
     }
-    async function tick() {
-      const res = await fetch("/api/recent-files", { cache: "no-store" });
-      const data = await res.json();
+    async function render(data) {
       document.getElementById("count").textContent = data.files.length + " recent files";
       document.getElementById("updated").textContent = fmt.format(new Date(data.generatedAt));
       document.getElementById("files").innerHTML = data.files.map((file, i) => {
@@ -289,8 +314,14 @@ function watchHtml() {
         return '<tr class="' + (i < 8 ? 'hot' : '') + '"><td class="age">' + age(ms) + ' ago<br><span class="muted">' + fmt.format(new Date(ms)) + '</span></td><td class="path">' + file.path + '</td><td class="muted">' + Math.round(file.size / 1024) + ' KB</td></tr>';
       }).join("");
     }
+    async function tick() {
+      const res = await fetch("/api/recent-files", { cache: "no-store" });
+      render(await res.json());
+    }
     tick();
-    setInterval(tick, 1500);
+    const events = new EventSource("/api/recent-files/events");
+    events.addEventListener("activity", (event) => render(JSON.parse(event.data)));
+    events.onerror = () => setTimeout(tick, 1500);
   </script>
 </body>
 </html>`;
@@ -310,6 +341,13 @@ function readStatic(pathname: string) {
 for (const p of [join(ROOT, ".context/workers"), join(ROOT, ".context/runs"), join(DIR, "src"), join(DIR, "server.ts"), join(DIR, "build-dashboard.ts")]) {
   try { watch(p, { recursive: true }, schedule); } catch {}
 }
+indexRecentFiles();
+try {
+  watch(ROOT, { recursive: true }, (_event, filename) => {
+    if (!filename) return;
+    indexOneFile(join(ROOT, String(filename)));
+  });
+} catch {}
 rebuild();
 
 Bun.serve({
@@ -325,7 +363,21 @@ Bun.serve({
     const url = new URL(req.url);
     if (url.pathname === "/ws") return server.upgrade(req) ? undefined : new Response("upgrade failed", { status: 400 });
     if (url.pathname === "/watch") return new Response(watchHtml(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
-    if (url.pathname === "/api/recent-files") return new Response(JSON.stringify(recentFilesJson(), null, 2), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    if (url.pathname === "/api/recent-files") return new Response(recentFilesJsonString(), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    if (url.pathname === "/api/recent-files/events") {
+      let activityController: ReadableStreamDefaultController | null = null;
+      const stream = new ReadableStream({
+        start(controller) {
+          activityController = controller;
+          activityClients.add(controller);
+          controller.enqueue(`event: activity\ndata: ${recentFilesJsonString()}\n\n`);
+        },
+        cancel() {
+          if (activityController) activityClients.delete(activityController);
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", "connection": "keep-alive" } });
+    }
     if (url.pathname === "/api/token") return new Response(JSON.stringify({ token: token() }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
     if (url.pathname === "/api/rebuild") { rebuild(); return new Response(lastState, { headers: { "content-type": "application/json", "cache-control": "no-store" } }); }
     if (url.pathname === "/api/project-prompt") {
@@ -385,3 +437,4 @@ Bun.serve({
   },
 });
 console.log(`The Machine dashboard: http://${HOST}:${PORT}`);
+setInterval(() => {}, 1 << 30);
