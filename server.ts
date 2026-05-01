@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync, watch } from "node:fs";
-import { join, normalize } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync, watch } from "node:fs";
+import { join, normalize, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const ROOT = process.env.MACHINE_ROOT ?? "/Users/jcoeyman/cloudflare";
@@ -203,6 +203,98 @@ function rebuild() {
 }
 function schedule() { if (timer) clearTimeout(timer); timer = setTimeout(rebuild, 120); }
 function type(path: string) { return path.endsWith(".html") ? "text/html; charset=utf-8" : path.endsWith(".js") ? "text/javascript; charset=utf-8" : path.endsWith(".css") ? "text/css; charset=utf-8" : path.endsWith(".json") ? "application/json; charset=utf-8" : "text/plain; charset=utf-8"; }
+const recentFileIgnoreDirs = new Set([".git", "node_modules", "dist", "build", ".next", ".svelte-kit", ".wrangler", ".turbo", "coverage"]);
+const recentFileIgnoreFiles = new Set([".DS_Store", "dashboard.json"]);
+const recentFileIgnorePathParts = [
+  ".context/machine-dashboard/data/",
+  ".context/machine-dashboard/dist/",
+  ".context/machine-dashboard/public/",
+];
+function recentFiles(dir = ROOT, out: any[] = [], depth = 0) {
+  if (depth > 6 || out.length > 2500) return out;
+  let entries: ReturnType<typeof readdirSync> = [];
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const ent of entries) {
+    if (recentFileIgnoreFiles.has(ent.name)) continue;
+    const path = join(dir, ent.name);
+    const relPath = relative(ROOT, path);
+    if (recentFileIgnorePathParts.some((part) => relPath.startsWith(part))) continue;
+    if (ent.isDirectory()) {
+      if (recentFileIgnoreDirs.has(ent.name)) continue;
+      recentFiles(path, out, depth + 1);
+      continue;
+    }
+    if (!ent.isFile()) continue;
+    try {
+      const st = statSync(path);
+      out.push({ path: relative(ROOT, path), mtime: st.mtimeMs, size: st.size });
+    } catch {}
+  }
+  return out;
+}
+function recentFilesJson() {
+  const files = recentFiles()
+    .sort((a, b) => b.mtime - a.mtime)
+    .slice(0, 160)
+    .map((file) => ({ ...file, mtimeIso: new Date(file.mtime).toISOString() }));
+  return { generatedAt: new Date().toISOString(), root: ROOT, files };
+}
+function watchHtml() {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Machine File Watch</title>
+  <style>
+    :root { color-scheme: light; --bg:#f4f6f8; --paper:#fff; --line:#d7dee5; --text:#1f2933; --muted:#667085; --hot:#155eef; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:13px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { padding:14px; }
+    .meta { display:grid; grid-template-columns: 180px 1fr 120px; gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; }
+    table { width:100%; border-collapse:collapse; background:var(--paper); border:1px solid var(--line); }
+    th, td { padding:7px 9px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { position:sticky; top:0; background:#f9fafb; z-index:1; color:var(--muted); font-size:11px; text-transform:uppercase; }
+    tr.hot td:first-child { border-left:3px solid var(--hot); }
+    .path { font-weight:750; overflow-wrap:anywhere; }
+    .muted { color:var(--muted); }
+    .age { white-space:nowrap; font-variant-numeric:tabular-nums; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="meta"><div id="count">loading</div><div>${ROOT}</div><div id="updated"></div></div>
+    <table>
+      <thead><tr><th>Updated</th><th>File</th><th>Size</th></tr></thead>
+      <tbody id="files"><tr><td colspan="3">loading</td></tr></tbody>
+    </table>
+  </main>
+  <script>
+    const fmt = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+    function age(ms) {
+      const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+      if (s < 60) return s + "s";
+      const m = Math.round(s / 60);
+      if (m < 60) return m + "m";
+      const h = Math.round(m / 60);
+      return h + "h";
+    }
+    async function tick() {
+      const res = await fetch("/api/recent-files", { cache: "no-store" });
+      const data = await res.json();
+      document.getElementById("count").textContent = data.files.length + " recent files";
+      document.getElementById("updated").textContent = fmt.format(new Date(data.generatedAt));
+      document.getElementById("files").innerHTML = data.files.map((file, i) => {
+        const ms = Date.parse(file.mtimeIso);
+        return '<tr class="' + (i < 8 ? 'hot' : '') + '"><td class="age">' + age(ms) + ' ago<br><span class="muted">' + fmt.format(new Date(ms)) + '</span></td><td class="path">' + file.path + '</td><td class="muted">' + Math.round(file.size / 1024) + ' KB</td></tr>';
+      }).join("");
+    }
+    tick();
+    setInterval(tick, 1500);
+  </script>
+</body>
+</html>`;
+}
 function readStatic(pathname: string) {
   if (pathname === "/") pathname = "/index.html";
   if (pathname === "/dashboard.html") pathname = "/index.html";
@@ -215,7 +307,7 @@ function readStatic(pathname: string) {
   return { p, data: readFileSync(p) };
 }
 
-for (const p of [join(ROOT, ".context/workers"), join(ROOT, ".context/runs"), join(DIR, "data/git-observer"), DIR]) {
+for (const p of [join(ROOT, ".context/workers"), join(ROOT, ".context/runs"), join(DIR, "src"), join(DIR, "server.ts"), join(DIR, "build-dashboard.ts")]) {
   try { watch(p, { recursive: true }, schedule); } catch {}
 }
 rebuild();
@@ -232,6 +324,8 @@ Bun.serve({
     if (!allowed(req)) return new Response("forbidden", { status: 403 });
     const url = new URL(req.url);
     if (url.pathname === "/ws") return server.upgrade(req) ? undefined : new Response("upgrade failed", { status: 400 });
+    if (url.pathname === "/watch") return new Response(watchHtml(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    if (url.pathname === "/api/recent-files") return new Response(JSON.stringify(recentFilesJson(), null, 2), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
     if (url.pathname === "/api/token") return new Response(JSON.stringify({ token: token() }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
     if (url.pathname === "/api/rebuild") { rebuild(); return new Response(lastState, { headers: { "content-type": "application/json", "cache-control": "no-store" } }); }
     if (url.pathname === "/api/project-prompt") {
