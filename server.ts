@@ -329,7 +329,7 @@ function watchHtml() {
     const canvas = document.getElementById("ambient");
     const paint = canvas.getContext("2d");
     const visualEvents = [];
-    const modes = ["ripples", "rain", "waves"];
+    const modes = ["ripples", "radar", "waves"];
     let mode = 0;
     let visualOn = false;
     let lastFrame = 0;
@@ -435,14 +435,14 @@ function watchHtml() {
       paint.fillStyle = bg;
       paint.fillRect(0, 0, innerWidth, innerHeight);
       if (modes[mode] === "ripples") drawRipples(now);
-      else if (modes[mode] === "rain") drawRain(now);
+      else if (modes[mode] === "radar") drawRadar(now);
       else drawWaves(now);
       for (let i = visualEvents.length - 1; i >= 0; i--) if (now - visualEvents[i].t > 4200) visualEvents.splice(i, 1);
       requestAnimationFrame(drawAmbient);
     }
     function drawRipples(now) {
       for (const event of visualEvents) {
-        const age = (now - event.t) / 1000;
+        const age = Math.max(0, (now - event.t) / 1000);
         const alpha = Math.max(0, 1 - age / 3.6);
         for (let i = 0; i < 3; i++) {
           const r = (age * 115 + i * 34) * (0.7 + event.strength * 0.08);
@@ -458,24 +458,73 @@ function watchHtml() {
         paint.fill();
       }
     }
-    function drawRain(now) {
+    function drawRadar(now) {
+      const cx = innerWidth * 0.5;
+      const cy = innerHeight * 0.52;
+      const maxR = Math.min(innerWidth, innerHeight) * 0.42;
+      const sweep = (now * 0.00042) % (Math.PI * 2);
+      paint.save();
+      paint.translate(cx, cy);
+      for (let i = 1; i <= 5; i++) {
+        paint.beginPath();
+        paint.arc(0, 0, maxR * i / 5, 0, Math.PI * 2);
+        paint.strokeStyle = "hsl(205 24% 52% / " + (0.05 + i * 0.012) + ")";
+        paint.lineWidth = 1;
+        paint.stroke();
+      }
+      for (let i = 0; i < 12; i++) {
+        const a = i * Math.PI / 6;
+        paint.beginPath();
+        paint.moveTo(Math.cos(a) * maxR * 0.18, Math.sin(a) * maxR * 0.18);
+        paint.lineTo(Math.cos(a) * maxR, Math.sin(a) * maxR);
+        paint.strokeStyle = "hsl(205 24% 52% / 0.035)";
+        paint.stroke();
+      }
+      const sweepGradient = paint.createRadialGradient(0, 0, 0, 0, 0, maxR);
+      sweepGradient.addColorStop(0, "hsl(185 70% 55% / 0.22)");
+      sweepGradient.addColorStop(1, "hsl(185 70% 55% / 0)");
+      paint.beginPath();
+      paint.moveTo(0, 0);
+      paint.arc(0, 0, maxR, sweep - 0.36, sweep);
+      paint.closePath();
+      paint.fillStyle = sweepGradient;
+      paint.fill();
+      paint.beginPath();
+      paint.moveTo(0, 0);
+      paint.lineTo(Math.cos(sweep) * maxR, Math.sin(sweep) * maxR);
+      paint.strokeStyle = "hsl(185 70% 45% / 0.34)";
+      paint.lineWidth = 1.5;
+      paint.stroke();
+      paint.restore();
       for (const event of visualEvents) {
-        const age = (now - event.t) / 1000;
-        const alpha = Math.max(0, 1 - age / 2.8);
-        for (let i = 0; i < event.strength + 2; i++) {
-          const x = event.x + ((((event.seed >>> i) % 90) - 45) * (1 + age * 0.5));
-          const y = (event.y + age * 190 + i * 28) % (innerHeight + 90) - 45;
-          paint.beginPath();
-          paint.ellipse(x, y, 5 + i, 16 + event.strength * 3, 0.08, 0, Math.PI * 2);
-          paint.fillStyle = event.color.b.replace(")", " / " + (alpha * 0.18) + ")");
-          paint.fill();
-        }
+        const age = Math.max(0, (now - event.t) / 1000);
+        const alpha = Math.max(0, 1 - age / 3.2);
+        const hashAngle = ((event.seed % 6283) / 1000);
+        const range = maxR * (0.26 + ((event.seed >>> 12) % 62) / 100);
+        const x = cx + Math.cos(hashAngle) * range;
+        const y = cy + Math.sin(hashAngle) * range;
+        const pulse = 1 + Math.sin(now * 0.009 + event.seed) * 0.18;
+        paint.beginPath();
+        paint.arc(x, y, (7 + event.strength * 2.2) * pulse, 0, Math.PI * 2);
+        paint.fillStyle = event.color.a.replace(")", " / " + (alpha * 0.24) + ")");
+        paint.fill();
+        paint.beginPath();
+        paint.arc(x, y, (20 + age * 42) * pulse, 0, Math.PI * 2);
+        paint.strokeStyle = event.color.b.replace(")", " / " + (alpha * 0.22) + ")");
+        paint.lineWidth = 1.4;
+        paint.stroke();
+        paint.beginPath();
+        paint.moveTo(cx, cy);
+        paint.lineTo(x, y);
+        paint.strokeStyle = event.color.a.replace(")", " / " + (alpha * 0.055) + ")");
+        paint.lineWidth = 1;
+        paint.stroke();
       }
     }
     function drawWaves(now) {
       paint.lineCap = "round";
       for (const event of visualEvents) {
-        const age = (now - event.t) / 1000;
+        const age = Math.max(0, (now - event.t) / 1000);
         const alpha = Math.max(0, 1 - age / 3.4);
         for (let band = 0; band < 4; band++) {
           paint.beginPath();
