@@ -289,10 +289,11 @@ function watchHtml() {
     table { width:100%; border-collapse:collapse; background:var(--paper); border:1px solid var(--line); }
     th, td { padding:7px 9px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
     th { position:sticky; top:0; background:#f9fafb; z-index:1; color:var(--muted); font-size:11px; text-transform:uppercase; }
-    tr.hot td:first-child { border-left:3px solid var(--hot); }
+    tr.hot td:first-child { border-left:3px solid var(--repo, var(--hot)); }
     tr.pulse { animation:file-pulse 1200ms ease-out both; }
     tr.pulse td { animation:cell-pulse 1200ms ease-out both; }
     .path { font-weight:750; overflow-wrap:anywhere; }
+    .path::before { content:""; display:inline-block; width:7px; height:7px; margin-right:8px; border-radius:50%; background:var(--repo, var(--hot)); box-shadow:0 0 0 3px var(--repo-soft, transparent); vertical-align:1px; }
     .muted { color:var(--muted); }
     .age { white-space:nowrap; font-variant-numeric:tabular-nums; }
     @keyframes file-pulse {
@@ -301,7 +302,7 @@ function watchHtml() {
       100% { transform:translateY(0); }
     }
     @keyframes cell-pulse {
-      0% { background:var(--glow); }
+      0% { background:var(--repo-wash, var(--glow)); }
       100% { background:transparent; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -396,7 +397,13 @@ function watchHtml() {
         a: "hsl(" + hue + " 72% 48%)",
         b: "hsl(" + ((hue + 48) % 360) + " 68% 62%)",
         c: "hsl(" + ((hue + 180) % 360) + " 58% 56%)",
+        soft: "hsl(" + hue + " 72% 48% / 0.16)",
+        wash: "hsl(" + hue + " 72% 48% / 0.11)",
       };
+    }
+    function repoStyle(path) {
+      const color = repoColor(repoName(path));
+      return "--repo:" + color.a + ";--repo-soft:" + color.soft + ";--repo-wash:" + color.wash;
     }
     function visualPulse(repo, strength) {
       const tone = repoTone(repo);
@@ -561,7 +568,7 @@ function watchHtml() {
       document.getElementById("updated").textContent = fmt.format(new Date(data.generatedAt));
       document.getElementById("files").innerHTML = data.files.map((file, i) => {
         const ms = Date.parse(file.mtimeIso);
-        return '<tr class="' + (i < 8 ? 'hot ' : '') + (changed.has(file.path) ? 'pulse' : '') + '"><td class="age">' + age(ms) + ' ago<br><span class="muted">' + fmt.format(new Date(ms)) + '</span></td><td class="path">' + file.path + '</td><td class="muted">' + Math.round(file.size / 1024) + ' KB</td></tr>';
+        return '<tr style="' + repoStyle(file.path) + '" class="' + (i < 8 ? 'hot ' : '') + (changed.has(file.path) ? 'pulse' : '') + '"><td class="age">' + age(ms) + ' ago<br><span class="muted">' + fmt.format(new Date(ms)) + '</span></td><td class="path">' + file.path + '</td><td class="muted">' + Math.round(file.size / 1024) + ' KB</td></tr>';
       }).join("");
       firstRender = false;
     }
