@@ -370,6 +370,7 @@ function watchHtml() {
     const deletedRows = new Map();
     let firstRender = true;
     let audio;
+    let audioReadyPinged = false;
     let lastChime = 0;
     const recentHits = [];
     const canvas = document.getElementById("ambient");
@@ -407,10 +408,15 @@ function watchHtml() {
       try {
         const ctx = audioContext();
         if (ctx.state !== "running") await ctx.resume();
+        if (ctx.state === "running" && !audioReadyPinged) {
+          audioReadyPinged = true;
+          const tone = repoTone(".context");
+          note(ctx, ctx.destination, tone, ctx.currentTime, tone.base * 0.7, 0.008, 0.09);
+        }
       } catch {}
     }
-    addEventListener("pointerdown", wakeAudio, { once: true });
-    addEventListener("keydown", wakeAudio, { once: true });
+    addEventListener("pointerdown", wakeAudio);
+    addEventListener("keydown", wakeAudio);
     function repoName(path) {
       if (path.startsWith(".context/")) return ".context";
       return path.split("/")[0] || "root";
@@ -629,7 +635,15 @@ function watchHtml() {
       visualPulse(repo, strength, kind, signal);
       try {
         const ctx = audioContext();
-        if (ctx.state !== "running") return;
+        if (ctx.state !== "running") {
+          ctx.resume().then(() => playChime(ctx, repo, strength, kind, signal)).catch(() => {});
+          return;
+        }
+        playChime(ctx, repo, strength, kind, signal);
+      } catch {}
+    }
+    function playChime(ctx, repo, strength, kind, signal) {
+      try {
         const tone = repoTone(repo);
         const t = ctx.currentTime;
         const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
