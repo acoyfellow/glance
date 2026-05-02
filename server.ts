@@ -215,8 +215,9 @@ const recentFileIgnorePathParts = [
 ];
 type ActivityFile = { path: string; mtime: number; mtimeIso: string; size: number };
 type ActivitySignal = "source" | "generated" | "log" | "config" | "secret" | "git" | "context" | "asset";
-type ActivityEvent = { kind: "create" | "modify" | "delete"; signal: ActivitySignal; path: string; repo: string; size: number; previousSize?: number; mtimeIso: string };
+type ActivityEvent = { kind: "create" | "modify" | "delete" | "burst"; signal: ActivitySignal; path: string; repo: string; size: number; previousSize?: number; mtimeIso: string; count?: number };
 const activityByPath = new Map<string, ActivityFile>();
+const burstWindows = new Map<string, number[]>();
 let activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root: ROOT, files: [] });
 let activityDirty = true;
 function repoForPath(relPath: string) {
@@ -274,7 +275,19 @@ function indexOneFile(path: string, notify = true) {
     }
   }
   activityDirty = true;
-  if (notify && event) broadcastActivity([event]);
+  if (notify && event) broadcastActivity(withBurstEvent(event));
+}
+function withBurstEvent(event: ActivityEvent): ActivityEvent[] {
+  if (event.kind === "delete") return [event];
+  const now = Date.now();
+  const key = `${event.repo}:${event.signal}`;
+  const hits = (burstWindows.get(key) || []).filter((hit) => now - hit < 1800);
+  hits.push(now);
+  burstWindows.set(key, hits);
+  if (hits.length === 4 || hits.length === 8 || hits.length === 14) {
+    return [event, { ...event, kind: "burst", count: hits.length, path: `${event.repo}/`, size: event.size }];
+  }
+  return [event];
 }
 function recentFilesJsonString() {
   if (!activityDirty) return activityCache;
@@ -498,7 +511,7 @@ function watchHtml() {
           paint.stroke();
         }
         paint.beginPath();
-        paint.arc(event.x, event.y, event.kind === "delete" ? Math.max(2, 7 - age * 2) : 5 + event.strength * 2, 0, Math.PI * 2);
+        paint.arc(event.x, event.y, event.kind === "burst" ? 12 + event.strength * 3 : event.kind === "delete" ? Math.max(2, 7 - age * 2) : 5 + event.strength * 2, 0, Math.PI * 2);
         paint.fillStyle = (event.signal === "secret" ? event.color.c : event.color.b).replace(")", " / " + (alpha * (event.signal === "generated" ? 0.18 : 0.34)) + ")");
         paint.fill();
       }
@@ -550,7 +563,7 @@ function watchHtml() {
         const y = cy + Math.sin(hashAngle) * range;
         const pulse = 1 + Math.sin(now * 0.009 + event.seed) * 0.18;
         paint.beginPath();
-        paint.arc(x, y, (event.signal === "log" ? 4 : event.kind === "delete" ? 5 : 7 + event.strength * 2.2) * pulse, 0, Math.PI * 2);
+        paint.arc(x, y, (event.kind === "burst" ? 14 + event.strength * 3 : event.signal === "log" ? 4 : event.kind === "delete" ? 5 : 7 + event.strength * 2.2) * pulse, 0, Math.PI * 2);
         paint.fillStyle = (event.kind === "delete" ? event.color.c : event.color.a).replace(")", " / " + (alpha * 0.24) + ")");
         paint.fill();
         paint.beginPath();
@@ -626,9 +639,11 @@ function watchHtml() {
           pan.connect(ctx.destination);
         }
         const density = Math.min(4, recentHits.length);
-        const drops = signal === "log" || signal === "generated" ? 1 : Math.min(4, Math.max(1, strength));
+        const drops = kind === "burst" ? 4 : signal === "log" || signal === "generated" ? 1 : Math.min(4, Math.max(1, strength));
         const volume = Math.min(signal === "generated" ? 0.016 : signal === "log" ? 0.012 : 0.027, 0.012 + density * 0.0025);
-        const pattern = signal === "secret"
+        const pattern = kind === "burst"
+          ? [tone.base * 0.75, tone.base, tone.high, tone.high * 1.28]
+          : signal === "secret"
           ? [tone.base * 0.5, tone.high * 1.5]
           : signal === "generated"
             ? [tone.overtone * 0.72]
@@ -659,7 +674,7 @@ function watchHtml() {
         if (event.kind === "delete") deletedRows.set(event.path, { ...event, expiresAt: now + 5500 });
         const signal = event.signal || "source";
         const key = event.repo + ":" + event.kind + ":" + signal;
-        changedRepos.set(key, { repo: event.repo, kind: event.kind, signal, count: (changedRepos.get(key)?.count || 0) + 1 });
+        changedRepos.set(key, { repo: event.repo, kind: event.kind, signal, count: Math.max(event.count || 1, (changedRepos.get(key)?.count || 0) + 1) });
       }
       for (const file of data.files) {
         const previous = seen.get(file.path);
