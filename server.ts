@@ -278,7 +278,14 @@ function watchHtml() {
     * { box-sizing:border-box; }
     body { margin:0; background:var(--bg); color:var(--text); font:13px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { padding:14px; }
-    .meta { display:grid; grid-template-columns: 180px 1fr 120px; gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; }
+    .meta { display:grid; grid-template-columns: 34px 180px 1fr 120px; gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; align-items:center; }
+    .ambient-toggle { width:26px; height:26px; border:1px solid var(--line); border-radius:999px; background:radial-gradient(circle at 35% 30%, #ffffff 0 15%, #bfeadc 16% 38%, #6d9ff8 39% 61%, #314b62 62% 100%); cursor:pointer; box-shadow:0 1px 2px rgba(31,41,51,.12); }
+    .ambient-toggle:focus-visible { outline:2px solid var(--hot); outline-offset:2px; }
+    body.ambient-on { overflow:hidden; }
+    #ambient { position:fixed; inset:0; width:100vw; height:100vh; z-index:20; opacity:0; pointer-events:none; background:#f6f8f5; transition:opacity 260ms ease; }
+    body.ambient-on #ambient { opacity:1; pointer-events:auto; }
+    body.ambient-on table, body.ambient-on .meta > div { visibility:hidden; }
+    body.ambient-on .ambient-toggle { position:fixed; top:14px; left:14px; z-index:30; }
     table { width:100%; border-collapse:collapse; background:var(--paper); border:1px solid var(--line); }
     th, td { padding:7px 9px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
     th { position:sticky; top:0; background:#f9fafb; z-index:1; color:var(--muted); font-size:11px; text-transform:uppercase; }
@@ -303,8 +310,9 @@ function watchHtml() {
   </style>
 </head>
 <body>
+  <canvas id="ambient" aria-hidden="true"></canvas>
   <main>
-    <div class="meta"><div id="count">loading</div><div>${ROOT}</div><div id="updated"></div></div>
+    <div class="meta"><button class="ambient-toggle" id="ambientToggle" type="button" aria-label="Toggle ambient visualizer"></button><div id="count">loading</div><div>${ROOT}</div><div id="updated"></div></div>
     <table>
       <thead><tr><th>Updated</th><th>File</th><th>Size</th></tr></thead>
       <tbody id="files"><tr><td colspan="3">loading</td></tr></tbody>
@@ -317,6 +325,33 @@ function watchHtml() {
     let audio;
     let lastChime = 0;
     const recentHits = [];
+    const canvas = document.getElementById("ambient");
+    const paint = canvas.getContext("2d");
+    const visualEvents = [];
+    const modes = ["ripples", "rain", "waves"];
+    let mode = 0;
+    let visualOn = false;
+    let lastFrame = 0;
+    function resizeAmbient() {
+      const dpr = Math.min(2, devicePixelRatio || 1);
+      canvas.width = Math.floor(innerWidth * dpr);
+      canvas.height = Math.floor(innerHeight * dpr);
+      paint.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    resizeAmbient();
+    addEventListener("resize", resizeAmbient);
+    document.getElementById("ambientToggle").addEventListener("click", () => {
+      visualOn = !visualOn;
+      document.body.classList.toggle("ambient-on", visualOn);
+      if (visualOn) {
+        seedAmbient(mode);
+        requestAnimationFrame(drawAmbient);
+      }
+    });
+    canvas.addEventListener("click", () => {
+      mode = (mode + 1) % modes.length;
+      seedAmbient(mode);
+    });
     function audioContext() {
       if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
       return audio;
@@ -354,6 +389,101 @@ function watchHtml() {
         wave: (hash & 1) ? "triangle" : "sine",
       };
     }
+    function repoColor(repo) {
+      const hash = hashText(repo);
+      const hue = (hash % 360);
+      return {
+        a: "hsl(" + hue + " 72% 48%)",
+        b: "hsl(" + ((hue + 48) % 360) + " 68% 62%)",
+        c: "hsl(" + ((hue + 180) % 360) + " 58% 56%)",
+      };
+    }
+    function visualPulse(repo, strength) {
+      const tone = repoTone(repo);
+      const color = repoColor(repo);
+      const x = innerWidth * (0.5 + tone.pan * 0.42);
+      visualEvents.push({ repo, color, x, y: innerHeight * (0.24 + ((hashText(repo) >>> 6) % 52) / 100), t: performance.now(), strength: Math.min(5, strength), seed: hashText(repo) });
+      while (visualEvents.length > 80) visualEvents.shift();
+      if (visualOn) requestAnimationFrame(drawAmbient);
+    }
+    function seedAmbient(nextMode) {
+      const repos = [...new Set([...seen.keys()].slice(0, 24).map(repoName))];
+      if (!repos.length) repos.push(".context", "cloudshell", "deja", "living-artifact");
+      for (let i = 0; i < Math.min(7, repos.length); i++) {
+        setTimeout(() => visualPulse(repos[(i + nextMode) % repos.length], 1), i * 80);
+      }
+    }
+    function drawAmbient(now) {
+      if (!visualOn) return;
+      if (now - lastFrame < 24) {
+        requestAnimationFrame(drawAmbient);
+        return;
+      }
+      lastFrame = now;
+      paint.clearRect(0, 0, innerWidth, innerHeight);
+      const bg = paint.createLinearGradient(0, 0, innerWidth, innerHeight);
+      bg.addColorStop(0, "#f7f8f3");
+      bg.addColorStop(0.52, "#eef5f3");
+      bg.addColorStop(1, "#f6f2ea");
+      paint.fillStyle = bg;
+      paint.fillRect(0, 0, innerWidth, innerHeight);
+      if (modes[mode] === "ripples") drawRipples(now);
+      else if (modes[mode] === "rain") drawRain(now);
+      else drawWaves(now);
+      for (let i = visualEvents.length - 1; i >= 0; i--) if (now - visualEvents[i].t > 4200) visualEvents.splice(i, 1);
+      requestAnimationFrame(drawAmbient);
+    }
+    function drawRipples(now) {
+      for (const event of visualEvents) {
+        const age = (now - event.t) / 1000;
+        const alpha = Math.max(0, 1 - age / 3.6);
+        for (let i = 0; i < 3; i++) {
+          const r = (age * 115 + i * 34) * (0.7 + event.strength * 0.08);
+          paint.beginPath();
+          paint.arc(event.x, event.y, r, 0, Math.PI * 2);
+          paint.strokeStyle = event.color.a.replace(")", " / " + (alpha * (0.23 - i * 0.045)) + ")");
+          paint.lineWidth = 1.8 + event.strength * 0.55;
+          paint.stroke();
+        }
+        paint.beginPath();
+        paint.arc(event.x, event.y, 5 + event.strength * 2, 0, Math.PI * 2);
+        paint.fillStyle = event.color.b.replace(")", " / " + (alpha * 0.34) + ")");
+        paint.fill();
+      }
+    }
+    function drawRain(now) {
+      for (const event of visualEvents) {
+        const age = (now - event.t) / 1000;
+        const alpha = Math.max(0, 1 - age / 2.8);
+        for (let i = 0; i < event.strength + 2; i++) {
+          const x = event.x + ((((event.seed >>> i) % 90) - 45) * (1 + age * 0.5));
+          const y = (event.y + age * 190 + i * 28) % (innerHeight + 90) - 45;
+          paint.beginPath();
+          paint.ellipse(x, y, 5 + i, 16 + event.strength * 3, 0.08, 0, Math.PI * 2);
+          paint.fillStyle = event.color.b.replace(")", " / " + (alpha * 0.18) + ")");
+          paint.fill();
+        }
+      }
+    }
+    function drawWaves(now) {
+      paint.lineCap = "round";
+      for (const event of visualEvents) {
+        const age = (now - event.t) / 1000;
+        const alpha = Math.max(0, 1 - age / 3.4);
+        for (let band = 0; band < 4; band++) {
+          paint.beginPath();
+          for (let x = -20; x <= innerWidth + 20; x += 18) {
+            const distance = Math.abs(x - event.x) / innerWidth;
+            const amp = (34 + event.strength * 10) * Math.max(0, 1 - distance * 1.5) * alpha;
+            const y = innerHeight * (0.45 + band * 0.075) + Math.sin(x * 0.014 + age * 3.8 + band) * amp;
+            if (x === -20) paint.moveTo(x, y); else paint.lineTo(x, y);
+          }
+          paint.strokeStyle = (band % 2 ? event.color.c : event.color.a).replace(")", " / " + (alpha * 0.16) + ")");
+          paint.lineWidth = 1.4 + event.strength * 0.2;
+          paint.stroke();
+        }
+      }
+    }
     function note(ctx, destination, tone, at, frequency, volume, duration) {
       const gain = ctx.createGain();
       const osc = ctx.createOscillator();
@@ -382,6 +512,7 @@ function watchHtml() {
       lastChime = now;
       recentHits.push(now);
       while (recentHits.length && now - recentHits[0] > 3500) recentHits.shift();
+      visualPulse(repo, strength);
       try {
         const ctx = audioContext();
         if (ctx.state !== "running") return;
