@@ -316,6 +316,7 @@ function watchHtml() {
     let firstRender = true;
     let audio;
     let lastChime = 0;
+    const recentHits = [];
     function audioContext() {
       if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
       return audio;
@@ -349,38 +350,56 @@ function watchHtml() {
         high: base * (1.25 + ((hash >>> 4) % 5) * 0.025),
         overtone: base * (1.48 + ((hash >>> 9) % 6) * 0.018),
         detune: -10 + ((hash >>> 15) % 21),
+        pan: (((hash >>> 21) % 101) - 50) / 100,
         wave: (hash & 1) ? "triangle" : "sine",
       };
+    }
+    function note(ctx, destination, tone, at, frequency, volume, duration) {
+      const gain = ctx.createGain();
+      const osc = ctx.createOscillator();
+      const extra = ctx.createOscillator();
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(volume, at + 0.014);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+      osc.frequency.setValueAtTime(frequency, at);
+      osc.frequency.exponentialRampToValueAtTime(frequency * 1.08, at + duration * 0.45);
+      extra.frequency.setValueAtTime(tone.overtone * (frequency / tone.base), at + 0.018);
+      osc.type = "sine";
+      extra.type = tone.wave;
+      extra.detune.setValueAtTime(tone.detune, at);
+      osc.connect(gain);
+      extra.connect(gain);
+      gain.connect(destination);
+      osc.start(at);
+      extra.start(at + 0.018);
+      osc.stop(at + duration);
+      extra.stop(at + duration * 0.78);
     }
     function chime(repo, strength) {
       if (firstRender || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
       const now = Date.now();
-      if (now - lastChime < 700) return;
+      if (now - lastChime < 420) return;
       lastChime = now;
+      recentHits.push(now);
+      while (recentHits.length && now - recentHits[0] > 3500) recentHits.shift();
       try {
         const ctx = audioContext();
         if (ctx.state !== "running") return;
         const tone = repoTone(repo);
-        const gain = ctx.createGain();
-        const osc = ctx.createOscillator();
-        const extra = ctx.createOscillator();
         const t = ctx.currentTime;
-        gain.gain.setValueAtTime(0.0001, t);
-        gain.gain.exponentialRampToValueAtTime(Math.min(0.035, 0.014 + strength * 0.004), t + 0.018);
-        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-        osc.frequency.setValueAtTime(tone.base, t);
-        osc.frequency.exponentialRampToValueAtTime(tone.high, t + 0.08);
-        extra.frequency.setValueAtTime(tone.overtone, t + 0.025);
-        osc.type = "sine";
-        extra.type = tone.wave;
-        extra.detune.setValueAtTime(tone.detune, t);
-        osc.connect(gain);
-        extra.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(t);
-        extra.start(t + 0.02);
-        osc.stop(t + 0.18);
-        extra.stop(t + 0.14);
+        const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+        const destination = pan || ctx.destination;
+        if (pan) {
+          pan.pan.setValueAtTime(tone.pan, t);
+          pan.connect(ctx.destination);
+        }
+        const density = Math.min(4, recentHits.length);
+        const drops = Math.min(4, Math.max(1, strength));
+        const volume = Math.min(0.027, 0.012 + density * 0.0025);
+        const pattern = [tone.base, tone.high, tone.base * 1.5, tone.high * 1.125];
+        for (let i = 0; i < drops; i++) {
+          note(ctx, destination, tone, t + i * 0.055, pattern[i % pattern.length], volume * (1 - i * 0.12), 0.16);
+        }
       } catch {}
     }
     function age(ms) {
@@ -393,16 +412,20 @@ function watchHtml() {
     }
     async function render(data) {
       const changed = new Set();
-      let changedRepo = "";
+      const changedRepos = new Map();
       for (const file of data.files) {
         const previous = seen.get(file.path);
         if (!firstRender && previous !== undefined && previous !== file.mtimeIso) {
           changed.add(file.path);
-          if (!changedRepo) changedRepo = repoName(file.path);
+          const repo = repoName(file.path);
+          changedRepos.set(repo, (changedRepos.get(repo) || 0) + 1);
         }
         seen.set(file.path, file.mtimeIso);
       }
-      if (changed.size) chime(changedRepo, changed.size);
+      if (changedRepos.size) {
+        let offset = 0;
+        for (const [repo, count] of changedRepos) setTimeout(() => chime(repo, count), offset++ * 85);
+      }
       document.getElementById("count").textContent = data.files.length + " recent files";
       document.getElementById("updated").textContent = fmt.format(new Date(data.generatedAt));
       document.getElementById("files").innerHTML = data.files.map((file, i) => {
