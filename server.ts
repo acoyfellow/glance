@@ -214,13 +214,26 @@ const recentFileIgnorePathParts = [
   ".context/machine-dashboard/dashboard.html",
 ];
 type ActivityFile = { path: string; mtime: number; mtimeIso: string; size: number };
-type ActivityEvent = { kind: "create" | "modify" | "delete"; path: string; repo: string; size: number; previousSize?: number; mtimeIso: string };
+type ActivitySignal = "source" | "generated" | "log" | "config" | "secret" | "git" | "context" | "asset";
+type ActivityEvent = { kind: "create" | "modify" | "delete"; signal: ActivitySignal; path: string; repo: string; size: number; previousSize?: number; mtimeIso: string };
 const activityByPath = new Map<string, ActivityFile>();
 let activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root: ROOT, files: [] });
 let activityDirty = true;
 function repoForPath(relPath: string) {
   if (relPath.startsWith(".context/")) return ".context";
   return relPath.split("/")[0] || "root";
+}
+function signalForPath(relPath: string): ActivitySignal {
+  const lower = relPath.toLowerCase();
+  const name = lower.split("/").at(-1) || lower;
+  if (lower.includes("/.git/") || lower.endsWith("/.git") || name === ".gitignore" || name === ".gitattributes") return "git";
+  if (name.includes("secret") || name === ".env" || name.startsWith(".env.") || lower.includes("/.env")) return "secret";
+  if (name.endsWith(".log") || lower.includes("/logs/") || lower.includes("/.local/")) return "log";
+  if (lower.includes("/dist/") || lower.includes("/build/") || lower.includes("/.astro/") || lower.includes("/public/artifacts/") || name.endsWith(".lock")) return "generated";
+  if (name.endsWith(".toml") || name.endsWith(".json") || name.endsWith(".jsonc") || name.endsWith(".yaml") || name.endsWith(".yml") || name.endsWith(".config.ts") || name.endsWith(".config.js")) return "config";
+  if (/\.(png|jpe?g|gif|webp|svg|mp3|wav|mp4|mov|bin|wasm)$/i.test(name)) return "asset";
+  if (lower.startsWith(".context/") || lower.includes("/.context/")) return "context";
+  return "source";
 }
 function shouldIgnoreRecentPath(relPath: string, name = relPath.split("/").at(-1) || relPath) {
   if (recentFileIgnoreFiles.has(name)) return true;
@@ -253,11 +266,11 @@ function indexOneFile(path: string, notify = true) {
     if (!st.isFile()) return;
     const next = { path: relPath, mtime: st.mtimeMs, mtimeIso: new Date(st.mtimeMs).toISOString(), size: st.size };
     activityByPath.set(relPath, next);
-    event = { kind: previous ? "modify" : "create", path: relPath, repo: repoForPath(relPath), size: st.size, previousSize: previous?.size, mtimeIso: next.mtimeIso };
+    event = { kind: previous ? "modify" : "create", signal: signalForPath(relPath), path: relPath, repo: repoForPath(relPath), size: st.size, previousSize: previous?.size, mtimeIso: next.mtimeIso };
   } catch {
     if (previous) {
       activityByPath.delete(relPath);
-      event = { kind: "delete", path: relPath, repo: repoForPath(relPath), size: 0, previousSize: previous.size, mtimeIso: new Date().toISOString() };
+      event = { kind: "delete", signal: signalForPath(relPath), path: relPath, repo: repoForPath(relPath), size: 0, previousSize: previous.size, mtimeIso: new Date().toISOString() };
     }
   }
   activityDirty = true;
@@ -306,6 +319,9 @@ function watchHtml() {
     th { position:sticky; top:0; background:#f9fafb; z-index:1; color:var(--muted); font-size:11px; text-transform:uppercase; }
     tr.hot td:first-child { border-left:3px solid var(--repo, var(--hot)); }
     tr.deleted td { color:var(--muted); text-decoration:line-through; text-decoration-thickness:1px; text-decoration-color:var(--repo); }
+    tr.secret td { background:linear-gradient(90deg, var(--repo-wash), transparent 42%); }
+    tr.generated .path { font-weight:620; }
+    tr.log .path { color:#475467; }
     tr.pulse { animation:file-pulse 1200ms ease-out both; }
     tr.pulse td { animation:cell-pulse 1200ms ease-out both; }
     .path { font-weight:750; overflow-wrap:anywhere; }
@@ -422,11 +438,23 @@ function watchHtml() {
       const color = repoColor(repoName(path));
       return "--repo:" + color.a + ";--repo-soft:" + color.soft + ";--repo-wash:" + color.wash;
     }
-    function visualPulse(repo, strength, kind = "modify") {
+    function signalForPath(path) {
+      const lower = path.toLowerCase();
+      const name = lower.split("/").at(-1) || lower;
+      if (lower.includes("/.git/") || lower.endsWith("/.git") || name === ".gitignore" || name === ".gitattributes") return "git";
+      if (name.includes("secret") || name === ".env" || name.startsWith(".env.") || lower.includes("/.env")) return "secret";
+      if (name.endsWith(".log") || lower.includes("/logs/") || lower.includes("/.local/")) return "log";
+      if (lower.includes("/dist/") || lower.includes("/build/") || lower.includes("/.astro/") || lower.includes("/public/artifacts/") || name.endsWith(".lock")) return "generated";
+      if (name.endsWith(".toml") || name.endsWith(".json") || name.endsWith(".jsonc") || name.endsWith(".yaml") || name.endsWith(".yml") || name.endsWith(".config.ts") || name.endsWith(".config.js")) return "config";
+      if (/\.(png|jpe?g|gif|webp|svg|mp3|wav|mp4|mov|bin|wasm)$/i.test(name)) return "asset";
+      if (lower.startsWith(".context/") || lower.includes("/.context/")) return "context";
+      return "source";
+    }
+    function visualPulse(repo, strength, kind = "modify", signal = "source") {
       const tone = repoTone(repo);
       const color = repoColor(repo);
       const x = innerWidth * (0.5 + tone.pan * 0.42);
-      visualEvents.push({ repo, kind, color, x, y: innerHeight * (0.24 + ((hashText(repo) >>> 6) % 52) / 100), t: performance.now(), strength: Math.min(5, strength), seed: hashText(repo) });
+      visualEvents.push({ repo, kind, signal, color, x, y: innerHeight * (0.24 + ((hashText(repo) >>> 6) % 52) / 100), t: performance.now(), strength: Math.min(5, strength), seed: hashText(repo) });
       while (visualEvents.length > 80) visualEvents.shift();
       if (visualOn) requestAnimationFrame(drawAmbient);
     }
@@ -434,7 +462,7 @@ function watchHtml() {
       const repos = [...new Set([...seen.keys()].slice(0, 24).map(repoName))];
       if (!repos.length) repos.push(".context", "cloudshell", "deja", "living-artifact");
       for (let i = 0; i < Math.min(7, repos.length); i++) {
-        setTimeout(() => visualPulse(repos[(i + nextMode) % repos.length], 1, "modify"), i * 80);
+        setTimeout(() => visualPulse(repos[(i + nextMode) % repos.length], 1, "modify", "source"), i * 80);
       }
     }
     function drawAmbient(now) {
@@ -471,7 +499,7 @@ function watchHtml() {
         }
         paint.beginPath();
         paint.arc(event.x, event.y, event.kind === "delete" ? Math.max(2, 7 - age * 2) : 5 + event.strength * 2, 0, Math.PI * 2);
-        paint.fillStyle = event.color.b.replace(")", " / " + (alpha * 0.34) + ")");
+        paint.fillStyle = (event.signal === "secret" ? event.color.c : event.color.b).replace(")", " / " + (alpha * (event.signal === "generated" ? 0.18 : 0.34)) + ")");
         paint.fill();
       }
     }
@@ -522,7 +550,7 @@ function watchHtml() {
         const y = cy + Math.sin(hashAngle) * range;
         const pulse = 1 + Math.sin(now * 0.009 + event.seed) * 0.18;
         paint.beginPath();
-        paint.arc(x, y, (event.kind === "delete" ? 5 : 7 + event.strength * 2.2) * pulse, 0, Math.PI * 2);
+        paint.arc(x, y, (event.signal === "log" ? 4 : event.kind === "delete" ? 5 : 7 + event.strength * 2.2) * pulse, 0, Math.PI * 2);
         paint.fillStyle = (event.kind === "delete" ? event.color.c : event.color.a).replace(")", " / " + (alpha * 0.24) + ")");
         paint.fill();
         paint.beginPath();
@@ -578,14 +606,14 @@ function watchHtml() {
       osc.stop(at + duration);
       extra.stop(at + duration * 0.78);
     }
-    function chime(repo, strength, kind = "modify") {
+    function chime(repo, strength, kind = "modify", signal = "source") {
       if (firstRender || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
       const now = Date.now();
       if (now - lastChime < 420) return;
       lastChime = now;
       recentHits.push(now);
       while (recentHits.length && now - recentHits[0] > 3500) recentHits.shift();
-      visualPulse(repo, strength, kind);
+      visualPulse(repo, strength, kind, signal);
       try {
         const ctx = audioContext();
         if (ctx.state !== "running") return;
@@ -598,15 +626,19 @@ function watchHtml() {
           pan.connect(ctx.destination);
         }
         const density = Math.min(4, recentHits.length);
-        const drops = Math.min(4, Math.max(1, strength));
-        const volume = Math.min(0.027, 0.012 + density * 0.0025);
-        const pattern = kind === "delete"
+        const drops = signal === "log" || signal === "generated" ? 1 : Math.min(4, Math.max(1, strength));
+        const volume = Math.min(signal === "generated" ? 0.016 : signal === "log" ? 0.012 : 0.027, 0.012 + density * 0.0025);
+        const pattern = signal === "secret"
+          ? [tone.base * 0.5, tone.high * 1.5]
+          : signal === "generated"
+            ? [tone.overtone * 0.72]
+            : kind === "delete"
           ? [tone.high * 0.82, tone.base * 0.72]
           : kind === "create"
             ? [tone.base * 0.92, tone.high, tone.high * 1.22]
             : [tone.base, tone.high, tone.base * 1.5, tone.high * 1.125];
         for (let i = 0; i < drops; i++) {
-          note(ctx, destination, tone, t + i * 0.055, pattern[i % pattern.length], volume * (1 - i * 0.12), kind === "delete" ? 0.22 : 0.16);
+          note(ctx, destination, tone, t + i * 0.055, pattern[i % pattern.length], volume * (1 - i * 0.12), kind === "delete" || signal === "secret" ? 0.22 : 0.16);
         }
       } catch {}
     }
@@ -625,8 +657,9 @@ function watchHtml() {
       const now = Date.now();
       for (const event of eventList) {
         if (event.kind === "delete") deletedRows.set(event.path, { ...event, expiresAt: now + 5500 });
-        const key = event.repo + ":" + event.kind;
-        changedRepos.set(key, { repo: event.repo, kind: event.kind, count: (changedRepos.get(key)?.count || 0) + 1 });
+        const signal = event.signal || "source";
+        const key = event.repo + ":" + event.kind + ":" + signal;
+        changedRepos.set(key, { repo: event.repo, kind: event.kind, signal, count: (changedRepos.get(key)?.count || 0) + 1 });
       }
       for (const file of data.files) {
         const previous = seen.get(file.path);
@@ -635,7 +668,7 @@ function watchHtml() {
           const repo = repoName(file.path);
           if (!eventList.length) {
             const key = repo + ":modify";
-            changedRepos.set(key, { repo, kind: "modify", count: (changedRepos.get(key)?.count || 0) + 1 });
+            changedRepos.set(key, { repo, kind: "modify", signal: "source", count: (changedRepos.get(key)?.count || 0) + 1 });
           }
         }
         seen.set(file.path, file.mtimeIso);
@@ -643,15 +676,16 @@ function watchHtml() {
       for (const [path, event] of deletedRows) if (event.expiresAt < now) deletedRows.delete(path);
       if (changedRepos.size) {
         let offset = 0;
-        for (const event of changedRepos.values()) setTimeout(() => chime(event.repo, event.count, event.kind), offset++ * 85);
+        for (const event of changedRepos.values()) setTimeout(() => chime(event.repo, event.count, event.kind, event.signal), offset++ * 85);
       }
       document.getElementById("count").textContent = data.files.length + " recent files";
       document.getElementById("updated").textContent = fmt.format(new Date(data.generatedAt));
-      const deleted = [...deletedRows.values()].map((event) => ({ path: event.path, mtimeIso: event.mtimeIso, size: event.previousSize || 0, deleted: true }));
+      const deleted = [...deletedRows.values()].map((event) => ({ path: event.path, signal: event.signal, mtimeIso: event.mtimeIso, size: event.previousSize || 0, deleted: true }));
       const rows = [...deleted, ...data.files].slice(0, 240);
       document.getElementById("files").innerHTML = rows.map((file, i) => {
         const ms = Date.parse(file.mtimeIso);
-        return '<tr style="' + repoStyle(file.path) + '" class="' + (i < 8 ? 'hot ' : '') + (changed.has(file.path) || file.deleted ? 'pulse ' : '') + (file.deleted ? 'deleted' : '') + '"><td class="age">' + age(ms) + ' ago<br><span class="muted">' + fmt.format(new Date(ms)) + '</span></td><td class="path">' + file.path + '</td><td class="muted">' + Math.round(file.size / 1024) + ' KB</td></tr>';
+        const signal = file.signal || signalForPath(file.path);
+        return '<tr style="' + repoStyle(file.path) + '" class="' + signal + ' ' + (i < 8 ? 'hot ' : '') + (changed.has(file.path) || file.deleted ? 'pulse ' : '') + (file.deleted ? 'deleted' : '') + '"><td class="age">' + age(ms) + ' ago<br><span class="muted">' + fmt.format(new Date(ms)) + '</span></td><td class="path">' + file.path + '</td><td class="muted">' + Math.round(file.size / 1024) + ' KB</td></tr>';
       }).join("");
       firstRender = false;
     }
