@@ -370,16 +370,18 @@ function watchHtml() {
     * { box-sizing:border-box; }
     body { margin:0; background:var(--bg); color:var(--text); font:13px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { padding:14px; }
-    .meta { display:grid; grid-template-columns: 34px 34px 180px 1fr 120px; gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; align-items:center; }
+    .meta { display:grid; grid-template-columns: 34px 34px 34px 180px 1fr 120px; gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; align-items:center; }
     .tool-button { width:26px; height:26px; border:1px solid var(--line); border-radius:999px; cursor:pointer; box-shadow:0 1px 2px rgba(31,41,51,.12); }
+    a.tool-button { display:block; }
     .tool-button:focus-visible { outline:2px solid var(--hot); outline-offset:2px; }
     .ambient-toggle { background:radial-gradient(circle at 35% 30%, #ffffff 0 15%, #bfeadc 16% 38%, #6d9ff8 39% 61%, #314b62 62% 100%); }
     .project-toggle { background:linear-gradient(135deg, #ffffff 0 24%, #dbe7ef 25% 42%, #7aa6b8 43% 57%, #f2d27c 58% 75%, #ffffff 76% 100%); }
+    .orb-link { background:radial-gradient(circle at 35% 44%, #ffe94a 0 18%, #ff7a17 19% 42%, #d51d14 43% 60%, #6ab9df 61% 100%); }
     body.project-view .project-toggle { box-shadow:0 0 0 3px rgba(122,166,184,.22), 0 1px 2px rgba(31,41,51,.12); }
     body.ambient-on { overflow:hidden; }
     #ambient { position:fixed; inset:0; width:100vw; height:100vh; z-index:20; opacity:0; pointer-events:none; background:#f6f8f5; transition:opacity 260ms ease; }
     body.ambient-on #ambient { opacity:1; pointer-events:auto; }
-    body.ambient-on table, body.ambient-on .meta > div, body.ambient-on .project-toggle { visibility:hidden; }
+    body.ambient-on table, body.ambient-on .meta > div, body.ambient-on .project-toggle, body.ambient-on .orb-link { visibility:hidden; }
     body.ambient-on .ambient-toggle { position:fixed; top:14px; left:14px; z-index:30; }
     table { width:100%; border-collapse:collapse; background:var(--paper); border:1px solid var(--line); }
     th, td { padding:7px 9px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
@@ -417,7 +419,7 @@ function watchHtml() {
 <body>
   <canvas id="ambient" aria-hidden="true"></canvas>
   <main>
-    <div class="meta"><button class="tool-button ambient-toggle" id="ambientToggle" type="button" aria-label="Toggle ambient visualizer"></button><button class="tool-button project-toggle" id="projectToggle" type="button" aria-label="Toggle project recency"></button><div id="count">loading</div><div>${ROOT}</div><div id="updated"></div></div>
+    <div class="meta"><button class="tool-button ambient-toggle" id="ambientToggle" type="button" aria-label="Toggle ambient visualizer"></button><button class="tool-button project-toggle" id="projectToggle" type="button" aria-label="Toggle project recency"></button><a class="tool-button orb-link" href="/orb" aria-label="Open machine orb"></a><div id="count">loading</div><div>${ROOT}</div><div id="updated"></div></div>
     <table>
       <thead id="head"><tr><th>Updated</th><th>File</th><th>Size</th></tr></thead>
       <tbody id="files"><tr><td colspan="3">loading</td></tr></tbody>
@@ -851,9 +853,21 @@ function orbHtml() {
   <style>
     html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#67b6dc; }
     canvas { display:block; width:100vw; height:100vh; }
+    .ui-link {
+      position:fixed; top:14px; left:14px; z-index:10; width:28px; height:28px;
+      border:1px solid rgba(255,255,255,.68); border-radius:999px;
+      background:rgba(255,255,255,.52); box-shadow:0 8px 22px rgba(20,52,79,.16);
+      backdrop-filter:blur(12px);
+    }
+    .ui-link::before {
+      content:""; position:absolute; left:8px; right:8px; top:8px; height:2px; border-radius:2px;
+      background:#264257; box-shadow:0 5px 0 #264257, 0 10px 0 #264257;
+    }
+    .ui-link:focus-visible { outline:2px solid #fff; outline-offset:3px; }
   </style>
 </head>
 <body>
+  <a class="ui-link" href="/watch" aria-label="Return to file watch"></a>
   <script type="module">
     import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js";
 
