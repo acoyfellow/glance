@@ -880,6 +880,80 @@ function orbHtml() {
 
     const clock = new THREE.Clock();
     const pulse = { value: 0 };
+    let audio;
+    let audioUnlocked = false;
+    let lastTone = 0;
+
+    function hashText(text) {
+      let hash = 2166136261;
+      for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    }
+    function repoTone(repo) {
+      const hash = hashText(repo || "root");
+      const scale = [0, 2, 4, 7, 9, 12];
+      const base = 520 * Math.pow(2, scale[hash % scale.length] / 12);
+      return {
+        base,
+        high: base * (1.32 + ((hash >>> 5) % 5) * 0.035),
+        air: base * (2.02 + ((hash >>> 12) % 7) * 0.028),
+        pan: (((hash >>> 20) % 101) - 50) / 100,
+        wave: (hash & 1) ? "triangle" : "sine",
+      };
+    }
+    function audioContext() {
+      if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+      return audio;
+    }
+    async function wakeAudio() {
+      try {
+        const ctx = audioContext();
+        if (ctx.state !== "running") await ctx.resume();
+        if (ctx.state === "running" && !audioUnlocked) {
+          audioUnlocked = true;
+          playChime(".context", 0.7, "wake");
+        }
+      } catch {}
+    }
+    function playTone(ctx, out, freq, time, wave, gain, attack, release) {
+      const osc = ctx.createOscillator();
+      const amp = ctx.createGain();
+      osc.type = wave;
+      osc.frequency.setValueAtTime(freq, time);
+      amp.gain.setValueAtTime(0.0001, time);
+      amp.gain.exponentialRampToValueAtTime(gain, time + attack);
+      amp.gain.exponentialRampToValueAtTime(0.0001, time + release);
+      osc.connect(amp).connect(out);
+      osc.start(time);
+      osc.stop(time + release + 0.03);
+    }
+    function playChime(repo, strength = 1, kind = "modify") {
+      if (!audioUnlocked) return;
+      const ctx = audioContext();
+      const now = ctx.currentTime;
+      if (now - lastTone < 0.045) return;
+      lastTone = now;
+      const tone = repoTone(repo);
+      const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+      const filter = ctx.createBiquadFilter();
+      const wet = ctx.createGain();
+      filter.type = "highpass";
+      filter.frequency.setValueAtTime(kind === "delete" ? 420 : 720, now);
+      wet.gain.setValueAtTime(Math.min(0.13, 0.045 + strength * 0.012), now);
+      if (pan) {
+        pan.pan.setValueAtTime(tone.pan, now);
+        filter.connect(pan).connect(wet).connect(ctx.destination);
+      } else {
+        filter.connect(wet).connect(ctx.destination);
+      }
+      const base = kind === "delete" ? tone.base * 0.62 : tone.base;
+      playTone(ctx, filter, base, now, tone.wave, 0.7, 0.006, 0.16);
+      playTone(ctx, filter, tone.high, now + 0.026, "sine", 0.38, 0.004, 0.13);
+      playTone(ctx, filter, tone.air, now + 0.052, "sine", 0.18, 0.003, 0.1);
+    }
 
     function makeEnvironmentTexture() {
       const canvas = document.createElement("canvas");
@@ -1174,8 +1248,9 @@ function orbHtml() {
     cyan.position.set(-2.2, 1.2, 2.6);
     scene.add(cyan);
 
-    function machinePulse(strength) {
+    function machinePulse(strength, repo = ".context", kind = "modify") {
       pulse.value = Math.min(2.4, pulse.value + 0.32 * Math.max(1, strength || 1));
+      playChime(repo, strength, kind);
     }
     try {
       const events = new EventSource("/api/recent-files/events");
@@ -1183,12 +1258,19 @@ function orbHtml() {
         try {
           const data = JSON.parse(event.data);
           const count = Array.isArray(data.events) ? data.events.reduce((n, item) => n + (item.count || 1), 0) : 1;
-          if (data.events && data.events.length) machinePulse(Math.min(8, count));
+          if (data.events && data.events.length) {
+            const event = data.events[0];
+            machinePulse(Math.min(8, count), event.repo || ".context", event.kind || "modify");
+          }
         } catch {}
       });
     } catch {}
 
-    addEventListener("pointerdown", () => machinePulse(2));
+    addEventListener("pointerdown", async () => {
+      await wakeAudio();
+      machinePulse(2, ".context", "wake");
+    });
+    addEventListener("keydown", wakeAudio);
 
     function resize() {
       camera.aspect = innerWidth / innerHeight;
