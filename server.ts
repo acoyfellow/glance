@@ -841,6 +841,275 @@ function watchHtml() {
 </body>
 </html>`;
 }
+function orbHtml() {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Machine Orb</title>
+  <style>
+    html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#67b6dc; }
+    canvas { display:block; width:100vw; height:100vh; }
+  </style>
+</head>
+<body>
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js";
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x5baed7);
+    scene.fog = new THREE.Fog(0x5baed7, 7.5, 14);
+
+    const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, 0.1, 100);
+    camera.position.set(0.08, 0.06, 7.2);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.12;
+    document.body.appendChild(renderer.domElement);
+
+    const group = new THREE.Group();
+    group.rotation.set(-0.18, -0.28, 0.12);
+    scene.add(group);
+
+    const clock = new THREE.Clock();
+    const pulse = { value: 0 };
+
+    function superellipsoidGeometry(width, height, depth, nu, nv, power) {
+      const positions = [];
+      const normals = [];
+      const uCount = 96;
+      const vCount = 48;
+      const signedPow = (value, p) => Math.sign(value) * Math.pow(Math.abs(value), p);
+      for (let y = 0; y <= vCount; y++) {
+        const v = -Math.PI / 2 + Math.PI * y / vCount;
+        for (let x = 0; x <= uCount; x++) {
+          const u = -Math.PI + Math.PI * 2 * x / uCount;
+          const cu = Math.cos(u), su = Math.sin(u);
+          const cv = Math.cos(v), sv = Math.sin(v);
+          const px = width * signedPow(cv, power) * signedPow(cu, power);
+          const py = height * signedPow(sv, power);
+          const pz = depth * signedPow(cv, power) * signedPow(su, power);
+          positions.push(px, py, pz);
+          normals.push(px / width, py / height, pz / depth);
+        }
+      }
+      const indices = [];
+      for (let y = 0; y < vCount; y++) {
+        for (let x = 0; x < uCount; x++) {
+          const a = y * (uCount + 1) + x;
+          const b = a + 1;
+          const c = a + (uCount + 1);
+          const d = c + 1;
+          indices.push(a, c, b, b, c, d);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geo.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+      geo.setIndex(indices);
+      geo.computeVertexNormals();
+      return geo;
+    }
+
+    const shellGeo = superellipsoidGeometry(2.2, 2.05, 0.68, 96, 48, 0.36);
+    const shellMat = new THREE.MeshPhysicalMaterial({
+      color: 0xd7f4ff,
+      metalness: 0,
+      roughness: 0.02,
+      transmission: 0.88,
+      thickness: 1.15,
+      ior: 1.42,
+      transparent: true,
+      opacity: 0.2,
+      clearcoat: 1,
+      clearcoatRoughness: 0.02,
+      attenuationColor: 0xff5d18,
+      attenuationDistance: 1.35,
+      side: THREE.DoubleSide,
+    });
+    const shell = new THREE.Mesh(shellGeo, shellMat);
+    shell.scale.set(1.18, 1.04, 1.02);
+    shell.material.depthWrite = false;
+    shell.renderOrder = 4;
+    group.add(shell);
+
+    const coreUniforms = { time: { value: 0 }, pulse: pulse };
+    const coreMat = new THREE.ShaderMaterial({
+      uniforms: coreUniforms,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      vertexShader: "varying vec2 vUv; varying vec3 vPos; void main(){ vUv=uv; vPos=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }",
+      fragmentShader: [
+        "uniform float time;",
+        "uniform float pulse;",
+        "varying vec2 vUv;",
+        "varying vec3 vPos;",
+        "float softBox(vec2 p, vec2 b, float r){ vec2 q=abs(p)-b+r; return length(max(q,0.0))+min(max(q.x,q.y),0.0)-r; }",
+        "void main(){",
+        "  vec2 p=vUv*2.0-1.0;",
+        "  p.x*=1.18;",
+        "  float d=softBox(p, vec2(0.82,0.72), 0.34);",
+        "  float mask=smoothstep(0.05,-0.08,d);",
+        "  float heat=smoothstep(-0.75,0.88,p.x+p.y*0.18+sin(time*0.38+p.y*2.4)*0.08);",
+        "  vec3 yellow=vec3(1.0,0.86,0.08);",
+        "  vec3 orange=vec3(1.0,0.37,0.0);",
+        "  vec3 red=vec3(0.78,0.0,0.03);",
+        "  vec3 col=mix(yellow,orange,heat);",
+        "  col=mix(col,red,smoothstep(0.2,1.0,p.x+p.y*0.12));",
+        "  float glow=0.22+0.18*sin(time+p.x*5.0)+pulse*0.3;",
+        "  gl_FragColor=vec4(col+glow, mask*0.96);",
+        "}"
+      ].join("\\n"),
+    });
+    const core = new THREE.Mesh(new THREE.PlaneGeometry(3.55, 3.05, 80, 80), coreMat);
+    core.position.set(-0.08, -0.2, 0.08);
+    core.rotation.z = -0.08;
+    core.renderOrder = 1;
+    group.add(core);
+
+    function makeRibbon(radius, tube, color, opacity, scaleX, scaleY, z, rot) {
+      const geo = new THREE.TorusGeometry(radius, tube, 22, 220);
+      const mat = new THREE.MeshPhysicalMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: 0.25,
+        metalness: 0.0,
+        roughness: 0.04,
+        transmission: 0.28,
+        thickness: 0.7,
+        transparent: true,
+        opacity,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.scale.set(scaleX, scaleY, 0.16);
+      mesh.position.z = z;
+      mesh.rotation.set(0.06, -0.08, rot);
+      mesh.material.depthWrite = false;
+      mesh.renderOrder = 2;
+      group.add(mesh);
+      return mesh;
+    }
+
+    const ribbons = [
+      makeRibbon(1.72, 0.085, 0xff2500, 0.66, 1.23, 0.94, 0.12, -0.16),
+      makeRibbon(1.92, 0.045, 0xffd719, 0.75, 1.18, 0.98, 0.21, -0.20),
+      makeRibbon(2.02, 0.035, 0x0b2442, 0.72, 1.12, 1.02, 0.27, -0.22),
+      makeRibbon(2.16, 0.025, 0x7bd7ff, 0.82, 1.08, 1.04, 0.31, -0.23),
+    ];
+
+    const bubbleGroup = new THREE.Group();
+    group.add(bubbleGroup);
+    const bubbleMat = new THREE.MeshPhysicalMaterial({
+      color: 0xfff2b5,
+      emissive: 0xff8c00,
+      emissiveIntensity: 0.35,
+      roughness: 0.01,
+      metalness: 0,
+      transmission: 0.58,
+      thickness: 0.55,
+      transparent: true,
+      opacity: 0.78,
+    });
+    const bubbleGeo = new THREE.SphereGeometry(1, 24, 16);
+    const bubbles = [];
+    for (let i = 0; i < 34; i++) {
+      const b = new THREE.Mesh(bubbleGeo, bubbleMat.clone());
+      const band = i / 33;
+      const x = -1.25 + Math.sin(i * 12.989) * 0.55 + band * 2.25;
+      const y = -1.1 + Math.sin(i * 4.27) * 1.28;
+      const z = 0.33 + Math.cos(i * 3.1) * 0.12;
+      const s = 0.022 + Math.pow((i * 37) % 19 / 19, 2.2) * 0.075;
+      b.position.set(x, y, z);
+      b.scale.setScalar(s);
+      b.userData = { x, y, z, phase: i * 0.73, scale: s };
+      bubbleGroup.add(b);
+      bubbles.push(b);
+    }
+
+    const glints = new THREE.Group();
+    group.add(glints);
+    const glintMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.58 });
+    for (let i = 0; i < 18; i++) {
+      const g = new THREE.Mesh(new THREE.SphereGeometry(0.025 + (i % 4) * 0.01, 14, 8), glintMat.clone());
+      g.position.set(-1.7 + Math.sin(i * 1.9) * 0.38 + i * 0.12, 0.45 + Math.cos(i * 0.8) * 0.5, 0.86 + Math.sin(i) * 0.04);
+      g.renderOrder = 5;
+      glints.add(g);
+    }
+
+    scene.add(new THREE.HemisphereLight(0xbbeeff, 0xff4a00, 2.7));
+    const key = new THREE.DirectionalLight(0xffffff, 4.2);
+    key.position.set(-3.4, 3.0, 5.5);
+    scene.add(key);
+    const red = new THREE.PointLight(0xff2600, 28, 8);
+    red.position.set(1.6, 0.9, 2.4);
+    scene.add(red);
+    const gold = new THREE.PointLight(0xffd41d, 22, 8);
+    gold.position.set(-1.4, -1.1, 2.8);
+    scene.add(gold);
+    const cyan = new THREE.PointLight(0x56d8ff, 12, 7);
+    cyan.position.set(-2.2, 1.2, 2.6);
+    scene.add(cyan);
+
+    function machinePulse(strength) {
+      pulse.value = Math.min(2.4, pulse.value + 0.32 * Math.max(1, strength || 1));
+    }
+    try {
+      const events = new EventSource("/api/recent-files/events");
+      events.addEventListener("activity", (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          const count = Array.isArray(data.events) ? data.events.reduce((n, item) => n + (item.count || 1), 0) : 1;
+          if (data.events && data.events.length) machinePulse(Math.min(8, count));
+        } catch {}
+      });
+    } catch {}
+
+    addEventListener("pointerdown", () => machinePulse(2));
+
+    function resize() {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    }
+    addEventListener("resize", resize);
+
+    function animate() {
+      const t = clock.getElapsedTime();
+      pulse.value *= 0.93;
+      coreUniforms.time.value = t;
+      group.rotation.y = -0.28 + Math.sin(t * 0.23) * 0.08 + pulse.value * 0.018;
+      group.rotation.x = -0.18 + Math.sin(t * 0.19) * 0.045;
+      group.rotation.z = 0.12 + Math.sin(t * 0.13) * 0.03;
+      shell.scale.set(1.18 + pulse.value * 0.018, 1.04 + pulse.value * 0.012, 1.02 + pulse.value * 0.02);
+      ribbons.forEach((r, i) => {
+        r.rotation.z += 0.0009 * (i + 1);
+        r.material.emissiveIntensity = 0.22 + pulse.value * 0.16 + Math.sin(t * 0.8 + i) * 0.05;
+      });
+      bubbles.forEach((b, i) => {
+        const u = b.userData;
+        b.position.x = u.x + Math.sin(t * 0.36 + u.phase) * 0.035;
+        b.position.y = u.y + Math.sin(t * 0.52 + u.phase) * 0.045 + pulse.value * 0.01;
+        b.scale.setScalar(u.scale * (1 + Math.sin(t * 1.2 + u.phase) * 0.18 + pulse.value * 0.08));
+        b.material.emissiveIntensity = 0.28 + pulse.value * 0.2;
+      });
+      glints.children.forEach((g, i) => {
+        g.material.opacity = 0.28 + Math.max(0, Math.sin(t * 1.1 + i)) * 0.38 + pulse.value * 0.08;
+      });
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+    animate();
+  </script>
+</body>
+</html>`;
+}
 function readStatic(pathname: string) {
   if (pathname === "/") pathname = "/index.html";
   if (pathname === "/dashboard.html") pathname = "/index.html";
@@ -880,6 +1149,7 @@ Bun.serve({
     const url = new URL(req.url);
     if (url.pathname === "/ws") return server.upgrade(req) ? undefined : new Response("upgrade failed", { status: 400 });
     if (url.pathname === "/watch") return new Response(watchHtml(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    if (url.pathname === "/orb") return new Response(orbHtml(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
     if (url.pathname === "/api/recent-files") return new Response(recentFilesJsonString(), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
     if (url.pathname === "/api/recent-files/events") {
       let activityController: ReadableStreamDefaultController | null = null;
