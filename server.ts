@@ -382,6 +382,9 @@ function watchHtml() {
     .fullscreen-toggle::after { right:6px; bottom:6px; border-width:0 2px 2px 0; }
     body.is-fullscreen .fullscreen-toggle::before { left:8px; top:8px; border-width:0 2px 2px 0; }
     body.is-fullscreen .fullscreen-toggle::after { right:8px; bottom:8px; border-width:2px 0 0 2px; }
+    body.is-fullscreen main { padding:0; }
+    body.is-fullscreen .meta { padding:8px 14px; margin:0; background:rgba(244,246,248,.94); border-bottom:1px solid var(--line); }
+    body.is-fullscreen table { border-left:0; border-right:0; border-bottom:0; }
     a.tool-button { display:block; }
     .tool-button:focus-visible { outline:2px solid var(--hot); outline-offset:2px; }
     .ambient-toggle { background:radial-gradient(circle at 35% 30%, #ffffff 0 15%, #bfeadc 16% 38%, #6d9ff8 39% 61%, #314b62 62% 100%); }
@@ -889,6 +892,21 @@ function orbHtml() {
   <style>
     html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#67b6dc; }
     canvas { display:block; width:100vw; height:100vh; }
+    .fullscreen-toggle {
+      position:fixed; top:14px; right:14px; z-index:10; width:28px; height:28px;
+      border:1px solid rgba(255,255,255,.68); border-radius:999px; cursor:pointer;
+      background:rgba(255,255,255,.52); box-shadow:0 8px 22px rgba(20,52,79,.16);
+      backdrop-filter:blur(12px);
+    }
+    .fullscreen-toggle::before, .fullscreen-toggle::after {
+      content:""; position:absolute; width:8px; height:8px; border-color:#264257; border-style:solid;
+    }
+    .fullscreen-toggle::before { left:7px; top:7px; border-width:2px 0 0 2px; }
+    .fullscreen-toggle::after { right:7px; bottom:7px; border-width:0 2px 2px 0; }
+    body.is-fullscreen .fullscreen-toggle::before { left:9px; top:9px; border-width:0 2px 2px 0; }
+    body.is-fullscreen .fullscreen-toggle::after { right:9px; bottom:9px; border-width:2px 0 0 2px; }
+    body.is-fullscreen .ui-link { opacity:.34; }
+    .fullscreen-toggle:focus-visible { outline:2px solid #fff; outline-offset:3px; }
     .ui-link {
       position:fixed; top:14px; left:14px; z-index:10; width:28px; height:28px;
       border:1px solid rgba(255,255,255,.68); border-radius:999px;
@@ -904,6 +922,7 @@ function orbHtml() {
 </head>
 <body>
   <a class="ui-link" href="/watch" aria-label="Return to file watch"></a>
+  <button class="fullscreen-toggle" id="fullscreenToggle" type="button" aria-label="Toggle fullscreen"></button>
   <script type="module">
     import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js";
 
@@ -935,6 +954,33 @@ function orbHtml() {
     let lastTone = 0;
     let lastObservedMtime = 0;
     let firstSnapshot = true;
+    let pageTakeover = false;
+
+    const fullscreenToggle = document.getElementById("fullscreenToggle");
+    function syncFullscreenState() {
+      const active = pageTakeover || Boolean(document.fullscreenElement);
+      document.body.classList.toggle("is-fullscreen", active);
+      fullscreenToggle.setAttribute("aria-pressed", active ? "true" : "false");
+    }
+    fullscreenToggle.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const next = !(pageTakeover || document.fullscreenElement);
+      pageTakeover = next;
+      try {
+        if (!next && document.fullscreenElement) await document.exitFullscreen();
+        else if (next && !document.fullscreenElement) await document.documentElement.requestFullscreen();
+      } catch {}
+      syncFullscreenState();
+    });
+    document.addEventListener("fullscreenchange", () => {
+      if (!document.fullscreenElement && !pageTakeover) syncFullscreenState();
+    });
+    addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && pageTakeover) {
+        pageTakeover = false;
+        syncFullscreenState();
+      }
+    });
 
     function hashText(text) {
       let hash = 2166136261;
