@@ -897,6 +897,8 @@ function orbHtml() {
     let audio;
     let audioUnlocked = false;
     let lastTone = 0;
+    let lastObservedMtime = 0;
+    let firstSnapshot = true;
 
     function hashText(text) {
       let hash = 2166136261;
@@ -956,7 +958,7 @@ function orbHtml() {
       const wet = ctx.createGain();
       filter.type = "highpass";
       filter.frequency.setValueAtTime(kind === "delete" ? 420 : 720, now);
-      wet.gain.setValueAtTime(Math.min(0.13, 0.045 + strength * 0.012), now);
+      wet.gain.setValueAtTime(Math.min(0.2, 0.075 + strength * 0.016), now);
       if (pan) {
         pan.pan.setValueAtTime(tone.pan, now);
         filter.connect(pan).connect(wet).connect(ctx.destination);
@@ -1266,11 +1268,36 @@ function orbHtml() {
       pulse.value = Math.min(2.4, pulse.value + 0.32 * Math.max(1, strength || 1));
       playChime(repo, strength, kind);
     }
+    function observeSnapshot(data) {
+      if (!data || !Array.isArray(data.files) || !data.files.length) return;
+      const latest = data.files[0];
+      const mtime = Date.parse(latest.mtimeIso || "");
+      if (!Number.isFinite(mtime)) return;
+      const previous = lastObservedMtime;
+      lastObservedMtime = Math.max(lastObservedMtime, mtime);
+      if (firstSnapshot) {
+        firstSnapshot = false;
+        if (Date.now() - mtime < 90000) machinePulse(1.4, (latest.path || ".context").split("/")[0], "modify");
+        return;
+      }
+      if (mtime > previous) {
+        const changed = data.files.filter((file) => Date.parse(file.mtimeIso || "") > previous).slice(0, 8);
+        const repo = ((changed[0] && changed[0].path) || latest.path || ".context").split("/")[0];
+        machinePulse(Math.max(1, changed.length), repo, "modify");
+      }
+    }
+    async function pollRecentFiles() {
+      try {
+        const res = await fetch("/api/recent-files", { cache: "no-store" });
+        observeSnapshot(await res.json());
+      } catch {}
+    }
     try {
       const events = new EventSource("/api/recent-files/events");
       events.addEventListener("activity", (event) => {
         try {
           const data = JSON.parse(event.data);
+          observeSnapshot(data);
           const count = Array.isArray(data.events) ? data.events.reduce((n, item) => n + (item.count || 1), 0) : 1;
           if (data.events && data.events.length) {
             const event = data.events[0];
@@ -1285,6 +1312,8 @@ function orbHtml() {
       machinePulse(2, ".context", "wake");
     });
     addEventListener("keydown", wakeAudio);
+    pollRecentFiles();
+    setInterval(pollRecentFiles, 1500);
 
     function resize() {
       camera.aspect = innerWidth / innerHeight;
