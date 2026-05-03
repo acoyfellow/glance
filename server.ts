@@ -861,8 +861,8 @@ function orbHtml() {
     scene.background = new THREE.Color(0x5baed7);
     scene.fog = new THREE.Fog(0x5baed7, 7.5, 14);
 
-    const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, 0.1, 100);
-    camera.position.set(0.08, 0.06, 7.2);
+    const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 100);
+    camera.position.set(-0.26, 0.2, 6.05);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -873,7 +873,9 @@ function orbHtml() {
     document.body.appendChild(renderer.domElement);
 
     const group = new THREE.Group();
-    group.rotation.set(-0.18, -0.28, 0.12);
+    group.position.set(0.12, -0.18, 0);
+    group.rotation.set(-0.23, -0.34, 0.16);
+    group.scale.set(1.16, 1.16, 1.16);
     scene.add(group);
 
     const clock = new THREE.Clock();
@@ -954,27 +956,70 @@ function orbHtml() {
         "void main(){",
         "  vec2 p=vUv*2.0-1.0;",
         "  p.x*=1.18;",
-        "  float d=softBox(p, vec2(0.82,0.72), 0.34);",
+        "  float d=softBox(p, vec2(0.86,0.78), 0.36);",
         "  float mask=smoothstep(0.05,-0.08,d);",
-        "  float heat=smoothstep(-0.75,0.88,p.x+p.y*0.18+sin(time*0.38+p.y*2.4)*0.08);",
+        "  float heat=smoothstep(-0.82,0.74,p.x+p.y*0.12+sin(time*0.38+p.y*2.4)*0.08);",
         "  vec3 yellow=vec3(1.0,0.86,0.08);",
         "  vec3 orange=vec3(1.0,0.37,0.0);",
-        "  vec3 red=vec3(0.78,0.0,0.03);",
+        "  vec3 red=vec3(0.96,0.0,0.02);",
         "  vec3 col=mix(yellow,orange,heat);",
         "  col=mix(col,red,smoothstep(0.2,1.0,p.x+p.y*0.12));",
-        "  float glow=0.22+0.18*sin(time+p.x*5.0)+pulse*0.3;",
+        "  float glow=0.12+0.12*sin(time+p.x*5.0)+pulse*0.32;",
         "  gl_FragColor=vec4(col+glow, mask*0.96);",
         "}"
       ].join("\\n"),
     });
-    const core = new THREE.Mesh(new THREE.PlaneGeometry(3.55, 3.05, 80, 80), coreMat);
-    core.position.set(-0.08, -0.2, 0.08);
+    const core = new THREE.Mesh(new THREE.PlaneGeometry(4.05, 3.42, 96, 96), coreMat);
+    core.position.set(-0.32, -0.33, 0.08);
     core.rotation.z = -0.08;
     core.renderOrder = 1;
     group.add(core);
 
-    function makeRibbon(radius, tube, color, opacity, scaleX, scaleY, z, rot) {
-      const geo = new THREE.TorusGeometry(radius, tube, 22, 220);
+    const rimMat = new THREE.ShaderMaterial({
+      uniforms: { time: coreUniforms.time, pulse },
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      vertexShader: "varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }",
+      fragmentShader: [
+        "uniform float time;",
+        "uniform float pulse;",
+        "varying vec2 vUv;",
+        "float softBox(vec2 p, vec2 b, float r){ vec2 q=abs(p)-b+r; return length(max(q,0.0))+min(max(q.x,q.y),0.0)-r; }",
+        "void main(){",
+        "  vec2 p=vUv*2.0-1.0;",
+        "  p.x*=1.12;",
+        "  float d=softBox(p, vec2(0.82,0.72), 0.35);",
+        "  float outer=smoothstep(0.14,-0.02,d);",
+        "  float inner=smoothstep(-0.18,-0.34,d);",
+        "  float rim=outer*(1.0-inner);",
+        "  float right=smoothstep(-0.12,0.92,p.x+sin(p.y*9.0+time)*0.06);",
+        "  float bottom=smoothstep(-0.15,0.86,-p.y+p.x*0.16);",
+        "  float hot=clamp(right+bottom,0.0,1.0);",
+        "  vec3 dark=vec3(0.02,0.015,0.035);",
+        "  vec3 red=vec3(1.0,0.05,0.0);",
+        "  vec3 gold=vec3(1.0,0.82,0.02);",
+        "  vec3 col=mix(dark,red,hot);",
+        "  col=mix(col,gold,smoothstep(0.82,1.0,hot));",
+        "  float veins=0.55+0.45*sin(p.y*34.0+p.x*9.0+time*1.5);",
+        "  gl_FragColor=vec4(col*(0.75+veins*0.45+pulse*0.12), rim*(0.62+hot*0.28));",
+        "}"
+      ].join("\\n"),
+    });
+    const innerRim = new THREE.Mesh(new THREE.PlaneGeometry(4.38, 3.72, 64, 64), rimMat);
+    innerRim.position.set(-0.27, -0.3, 0.16);
+    innerRim.rotation.z = -0.08;
+    innerRim.renderOrder = 3;
+    group.add(innerRim);
+
+    function makeRibbon(radius, tube, color, opacity, scaleX, scaleY, z, rot, start = 0.08, length = 5.2) {
+      const curve = new THREE.Curve();
+      curve.getPoint = function(t) {
+        const a = start + t * length;
+        const wobble = Math.sin(t * Math.PI * 6.0 + radius) * 0.045 + Math.sin(t * Math.PI * 15.0) * 0.015;
+        return new THREE.Vector3(Math.cos(a) * (radius + wobble), Math.sin(a) * (radius * 0.86 + wobble), Math.sin(t * Math.PI * 2.0) * 0.035);
+      };
+      const geo = new THREE.TubeGeometry(curve, 190, tube, 14, false);
       const mat = new THREE.MeshPhysicalMaterial({
         color,
         emissive: color,
@@ -998,11 +1043,27 @@ function orbHtml() {
     }
 
     const ribbons = [
-      makeRibbon(1.72, 0.085, 0xff2500, 0.66, 1.23, 0.94, 0.12, -0.16),
-      makeRibbon(1.92, 0.045, 0xffd719, 0.75, 1.18, 0.98, 0.21, -0.20),
-      makeRibbon(2.02, 0.035, 0x0b2442, 0.72, 1.12, 1.02, 0.27, -0.22),
-      makeRibbon(2.16, 0.025, 0x7bd7ff, 0.82, 1.08, 1.04, 0.31, -0.23),
+      makeRibbon(1.72, 0.095, 0xff2100, 0.78, 1.3, 1.02, 0.18, -0.18, 0.18, 5.35),
+      makeRibbon(1.91, 0.05, 0xffdc1c, 0.86, 1.22, 1.06, 0.27, -0.22, 0.05, 4.95),
+      makeRibbon(2.04, 0.04, 0x071b35, 0.82, 1.16, 1.08, 0.34, -0.24, 0.28, 5.55),
+      makeRibbon(2.2, 0.028, 0x73d9ff, 0.9, 1.12, 1.11, 0.39, -0.25, 0.1, 5.1),
     ];
+
+    const streaks = [];
+    function makeStreak(x, y, h, color, opacity) {
+      const geo = new THREE.PlaneGeometry(0.055, h, 1, 12);
+      const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false });
+      const s = new THREE.Mesh(geo, mat);
+      s.position.set(x, y, 0.58);
+      s.rotation.z = -0.12;
+      s.renderOrder = 6;
+      group.add(s);
+      streaks.push(s);
+      return s;
+    }
+    for (let i = 0; i < 22; i++) {
+      makeStreak(1.26 + Math.sin(i * 1.7) * 0.19, -1.48 + i * 0.16, 0.42 + (i % 6) * 0.18, i % 3 === 0 ? 0xffee35 : i % 3 === 1 ? 0xff1c00 : 0x64d6ff, 0.22 + (i % 4) * 0.055);
+    }
 
     const bubbleGroup = new THREE.Group();
     group.add(bubbleGroup);
@@ -1022,9 +1083,9 @@ function orbHtml() {
     for (let i = 0; i < 34; i++) {
       const b = new THREE.Mesh(bubbleGeo, bubbleMat.clone());
       const band = i / 33;
-      const x = -1.25 + Math.sin(i * 12.989) * 0.55 + band * 2.25;
-      const y = -1.1 + Math.sin(i * 4.27) * 1.28;
-      const z = 0.33 + Math.cos(i * 3.1) * 0.12;
+      const x = -1.45 + Math.sin(i * 12.989) * 0.55 + band * 2.45;
+      const y = -1.28 + Math.sin(i * 4.27) * 1.38;
+      const z = 0.62 + Math.cos(i * 3.1) * 0.12;
       const s = 0.022 + Math.pow((i * 37) % 19 / 19, 2.2) * 0.075;
       b.position.set(x, y, z);
       b.scale.setScalar(s);
@@ -1084,13 +1145,17 @@ function orbHtml() {
       const t = clock.getElapsedTime();
       pulse.value *= 0.93;
       coreUniforms.time.value = t;
-      group.rotation.y = -0.28 + Math.sin(t * 0.23) * 0.08 + pulse.value * 0.018;
-      group.rotation.x = -0.18 + Math.sin(t * 0.19) * 0.045;
-      group.rotation.z = 0.12 + Math.sin(t * 0.13) * 0.03;
+      group.rotation.y = -0.34 + Math.sin(t * 0.23) * 0.055 + pulse.value * 0.018;
+      group.rotation.x = -0.23 + Math.sin(t * 0.19) * 0.035;
+      group.rotation.z = 0.16 + Math.sin(t * 0.13) * 0.025;
       shell.scale.set(1.18 + pulse.value * 0.018, 1.04 + pulse.value * 0.012, 1.02 + pulse.value * 0.02);
       ribbons.forEach((r, i) => {
-        r.rotation.z += 0.0009 * (i + 1);
+        r.rotation.z += 0.00045 * (i + 1);
         r.material.emissiveIntensity = 0.22 + pulse.value * 0.16 + Math.sin(t * 0.8 + i) * 0.05;
+      });
+      streaks.forEach((s, i) => {
+        s.material.opacity = 0.12 + Math.max(0, Math.sin(t * 0.9 + i * 0.41)) * 0.18 + pulse.value * 0.04;
+        s.scale.y = 0.9 + Math.sin(t * 0.7 + i) * 0.08 + pulse.value * 0.05;
       });
       bubbles.forEach((b, i) => {
         const u = b.userData;
