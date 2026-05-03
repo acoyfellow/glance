@@ -858,11 +858,11 @@ function orbHtml() {
     import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js";
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x5baed7);
-    scene.fog = new THREE.Fog(0x5baed7, 7.5, 14);
+    scene.background = new THREE.Color(0x63b4dc);
+    scene.fog = new THREE.Fog(0x63b4dc, 8.5, 16);
 
     const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 100);
-    camera.position.set(-0.26, 0.2, 6.05);
+    camera.position.set(-0.18, 0.14, 7.25);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -873,19 +873,51 @@ function orbHtml() {
     document.body.appendChild(renderer.domElement);
 
     const group = new THREE.Group();
-    group.position.set(0.12, -0.18, 0);
+    group.position.set(0.52, -0.32, 0);
     group.rotation.set(-0.23, -0.34, 0.16);
-    group.scale.set(1.16, 1.16, 1.16);
+    group.scale.set(0.82, 0.82, 0.82);
     scene.add(group);
 
     const clock = new THREE.Clock();
     const pulse = { value: 0 };
 
-    function superellipsoidGeometry(width, height, depth, nu, nv, power) {
+    function makeEnvironmentTexture() {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1024;
+      canvas.height = 512;
+      const ctx = canvas.getContext("2d");
+      const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      sky.addColorStop(0, "#d9f8ff");
+      sky.addColorStop(0.22, "#76c7e8");
+      sky.addColorStop(0.55, "#3a91c4");
+      sky.addColorStop(1, "#f63b13");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const bands = [
+        ["rgba(255,255,255,.95)", 70, 28, 32, 455],
+        ["rgba(255,222,33,.8)", 150, 44, 26, 430],
+        ["rgba(5,12,36,.86)", 258, 0, 34, 512],
+        ["rgba(255,67,0,.82)", 690, 32, 48, 430],
+        ["rgba(255,244,82,.75)", 828, 10, 36, 492],
+        ["rgba(80,220,255,.65)", 910, 120, 28, 340],
+      ];
+      for (const [color, x, y, w, h] of bands) {
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y, w, h);
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.mapping = THREE.EquirectangularReflectionMapping;
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    }
+    const environment = makeEnvironmentTexture();
+    scene.environment = environment;
+
+    function superellipsoidGeometry(width, height, depth, nu, nv, power, warp = 0) {
       const positions = [];
       const normals = [];
-      const uCount = 96;
-      const vCount = 48;
+      const uCount = nu;
+      const vCount = nv;
       const signedPow = (value, p) => Math.sign(value) * Math.pow(Math.abs(value), p);
       for (let y = 0; y <= vCount; y++) {
         const v = -Math.PI / 2 + Math.PI * y / vCount;
@@ -893,9 +925,14 @@ function orbHtml() {
           const u = -Math.PI + Math.PI * 2 * x / uCount;
           const cu = Math.cos(u), su = Math.sin(u);
           const cv = Math.cos(v), sv = Math.sin(v);
-          const px = width * signedPow(cv, power) * signedPow(cu, power);
-          const py = height * signedPow(sv, power);
-          const pz = depth * signedPow(cv, power) * signedPow(su, power);
+          const organic = 1 + warp * (
+            Math.sin(u * 3.0 + v * 4.7) * 0.55 +
+            Math.sin(u * 7.0 - v * 2.3) * 0.25 +
+            Math.cos(u * 2.0 + v * 8.0) * 0.2
+          );
+          const px = width * organic * signedPow(cv, power) * signedPow(cu, power);
+          const py = height * organic * signedPow(sv, power);
+          const pz = depth * organic * signedPow(cv, power) * signedPow(su, power);
           positions.push(px, py, pz);
           normals.push(px / width, py / height, pz / depth);
         }
@@ -918,24 +955,25 @@ function orbHtml() {
       return geo;
     }
 
-    const shellGeo = superellipsoidGeometry(2.2, 2.05, 0.68, 96, 48, 0.36);
+    const shellGeo = superellipsoidGeometry(2.22, 2.04, 0.86, 128, 64, 0.72, 0.045);
     const shellMat = new THREE.MeshPhysicalMaterial({
       color: 0xd7f4ff,
       metalness: 0,
-      roughness: 0.02,
-      transmission: 0.88,
-      thickness: 1.15,
-      ior: 1.42,
+      roughness: 0.006,
+      transmission: 0.96,
+      thickness: 2.5,
+      ior: 1.52,
       transparent: true,
-      opacity: 0.2,
+      opacity: 0.44,
       clearcoat: 1,
-      clearcoatRoughness: 0.02,
-      attenuationColor: 0xff5d18,
-      attenuationDistance: 1.35,
+      clearcoatRoughness: 0.01,
+      attenuationColor: 0xff6a1a,
+      attenuationDistance: 0.82,
+      envMapIntensity: 2.6,
       side: THREE.DoubleSide,
     });
     const shell = new THREE.Mesh(shellGeo, shellMat);
-    shell.scale.set(1.18, 1.04, 1.02);
+    shell.scale.set(1.12, 1.02, 1.08);
     shell.material.depthWrite = false;
     shell.renderOrder = 4;
     group.add(shell);
@@ -945,33 +983,43 @@ function orbHtml() {
       uniforms: coreUniforms,
       transparent: true,
       depthWrite: false,
-      depthTest: false,
-      vertexShader: "varying vec2 vUv; varying vec3 vPos; void main(){ vUv=uv; vPos=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }",
+      depthTest: true,
+      vertexShader: [
+        "varying vec3 vPos;",
+        "varying vec3 vNormal;",
+        "void main(){",
+        "  vPos=position;",
+        "  vNormal=normalize(normalMatrix*normal);",
+        "  vec3 displaced=position+normal*(sin(position.y*7.0+position.x*3.0)*0.025);",
+        "  gl_Position=projectionMatrix*modelViewMatrix*vec4(displaced,1.0);",
+        "}"
+      ].join("\\n"),
       fragmentShader: [
         "uniform float time;",
         "uniform float pulse;",
-        "varying vec2 vUv;",
         "varying vec3 vPos;",
-        "float softBox(vec2 p, vec2 b, float r){ vec2 q=abs(p)-b+r; return length(max(q,0.0))+min(max(q.x,q.y),0.0)-r; }",
+        "varying vec3 vNormal;",
         "void main(){",
-        "  vec2 p=vUv*2.0-1.0;",
-        "  p.x*=1.18;",
-        "  float d=softBox(p, vec2(0.86,0.78), 0.36);",
-        "  float mask=smoothstep(0.05,-0.08,d);",
-        "  float heat=smoothstep(-0.82,0.74,p.x+p.y*0.12+sin(time*0.38+p.y*2.4)*0.08);",
+        "  vec2 p=vPos.xy/vec2(1.5,1.28);",
+        "  float heat=smoothstep(-0.95,0.78,p.x+p.y*0.12+sin(time*0.38+p.y*2.8)*0.09);",
         "  vec3 yellow=vec3(1.0,0.86,0.08);",
-        "  vec3 orange=vec3(1.0,0.37,0.0);",
-        "  vec3 red=vec3(0.96,0.0,0.02);",
+        "  vec3 orange=vec3(1.0,0.34,0.0);",
+        "  vec3 red=vec3(0.92,0.0,0.015);",
         "  vec3 col=mix(yellow,orange,heat);",
-        "  col=mix(col,red,smoothstep(0.2,1.0,p.x+p.y*0.12));",
-        "  float glow=0.12+0.12*sin(time+p.x*5.0)+pulse*0.32;",
-        "  gl_FragColor=vec4(col+glow, mask*0.96);",
+        "  col=mix(col,red,smoothstep(0.18,0.95,p.x+p.y*0.08));",
+        "  float fres=pow(1.0-abs(vNormal.z),1.25);",
+        "  float veins=0.5+0.5*sin(p.x*16.0+p.y*21.0+time*0.9);",
+        "  float shadow=smoothstep(-0.15,0.92,-p.y+p.x*0.32);",
+        "  col=mix(col,vec3(0.07,0.0,0.025),fres*0.45);",
+        "  col+=veins*0.035+pulse*0.13;",
+        "  gl_FragColor=vec4(col,0.86+shadow*0.08);",
         "}"
       ].join("\\n"),
     });
-    const core = new THREE.Mesh(new THREE.PlaneGeometry(4.05, 3.42, 96, 96), coreMat);
-    core.position.set(-0.32, -0.33, 0.08);
-    core.rotation.z = -0.08;
+    const core = new THREE.Mesh(superellipsoidGeometry(1.02, 0.9, 0.44, 128, 64, 0.86, 0.105), coreMat);
+    core.position.set(-0.43, -0.55, 0.02);
+    core.rotation.z = -0.16;
+    core.scale.set(1.28, 1.04, 1.0);
     core.renderOrder = 1;
     group.add(core);
 
@@ -979,22 +1027,28 @@ function orbHtml() {
       uniforms: { time: coreUniforms.time, pulse },
       transparent: true,
       depthWrite: false,
-      depthTest: false,
-      vertexShader: "varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }",
+      depthTest: true,
+      side: THREE.DoubleSide,
+      vertexShader: [
+        "varying vec3 vPos;",
+        "varying vec3 vNormal;",
+        "void main(){",
+        "  vPos=position;",
+        "  vNormal=normalize(normalMatrix*normal);",
+        "  vec3 displaced=position+normal*(sin(position.y*18.0+position.x*5.0)*0.035);",
+        "  gl_Position=projectionMatrix*modelViewMatrix*vec4(displaced,1.0);",
+        "}"
+      ].join("\\n"),
       fragmentShader: [
         "uniform float time;",
         "uniform float pulse;",
-        "varying vec2 vUv;",
-        "float softBox(vec2 p, vec2 b, float r){ vec2 q=abs(p)-b+r; return length(max(q,0.0))+min(max(q.x,q.y),0.0)-r; }",
+        "varying vec3 vPos;",
+        "varying vec3 vNormal;",
         "void main(){",
-        "  vec2 p=vUv*2.0-1.0;",
-        "  p.x*=1.12;",
-        "  float d=softBox(p, vec2(0.82,0.72), 0.35);",
-        "  float outer=smoothstep(0.14,-0.02,d);",
-        "  float inner=smoothstep(-0.18,-0.34,d);",
-        "  float rim=outer*(1.0-inner);",
-        "  float right=smoothstep(-0.12,0.92,p.x+sin(p.y*9.0+time)*0.06);",
-        "  float bottom=smoothstep(-0.15,0.86,-p.y+p.x*0.16);",
+        "  vec2 p=vPos.xy/vec2(2.04,1.68);",
+        "  float fres=pow(1.0-abs(vNormal.z),0.86);",
+        "  float right=smoothstep(-0.2,0.85,p.x+sin(p.y*9.0+time)*0.08);",
+        "  float bottom=smoothstep(-0.18,0.86,-p.y+p.x*0.18);",
         "  float hot=clamp(right+bottom,0.0,1.0);",
         "  vec3 dark=vec3(0.02,0.015,0.035);",
         "  vec3 red=vec3(1.0,0.05,0.0);",
@@ -1002,12 +1056,14 @@ function orbHtml() {
         "  vec3 col=mix(dark,red,hot);",
         "  col=mix(col,gold,smoothstep(0.82,1.0,hot));",
         "  float veins=0.55+0.45*sin(p.y*34.0+p.x*9.0+time*1.5);",
-        "  gl_FragColor=vec4(col*(0.75+veins*0.45+pulse*0.12), rim*(0.62+hot*0.28));",
+        "  float top=smoothstep(0.12,0.82,p.y-p.x*0.18);",
+        "  col=mix(col,dark,top*0.72);",
+        "  gl_FragColor=vec4(col*(0.78+veins*0.5+pulse*0.12), fres*(0.46+hot*0.42+top*0.28));",
         "}"
       ].join("\\n"),
     });
-    const innerRim = new THREE.Mesh(new THREE.PlaneGeometry(4.38, 3.72, 64, 64), rimMat);
-    innerRim.position.set(-0.27, -0.3, 0.16);
+    const innerRim = new THREE.Mesh(superellipsoidGeometry(2.08, 1.82, 0.78, 128, 64, 0.68, 0.075), rimMat);
+    innerRim.position.set(-0.2, -0.3, 0.16);
     innerRim.rotation.z = -0.08;
     innerRim.renderOrder = 3;
     group.add(innerRim);
@@ -1043,10 +1099,10 @@ function orbHtml() {
     }
 
     const ribbons = [
-      makeRibbon(1.72, 0.095, 0xff2100, 0.78, 1.3, 1.02, 0.18, -0.18, 0.18, 5.35),
-      makeRibbon(1.91, 0.05, 0xffdc1c, 0.86, 1.22, 1.06, 0.27, -0.22, 0.05, 4.95),
-      makeRibbon(2.04, 0.04, 0x071b35, 0.82, 1.16, 1.08, 0.34, -0.24, 0.28, 5.55),
-      makeRibbon(2.2, 0.028, 0x73d9ff, 0.9, 1.12, 1.11, 0.39, -0.25, 0.1, 5.1),
+      makeRibbon(1.72, 0.082, 0xff2100, 0.7, 1.3, 1.02, 0.18, -0.18, 0.18, 5.35),
+      makeRibbon(1.91, 0.042, 0xffdc1c, 0.78, 1.22, 1.06, 0.27, -0.22, 0.05, 4.95),
+      makeRibbon(2.04, 0.052, 0x071b35, 0.92, 1.16, 1.08, 0.36, -0.24, 0.28, 5.55),
+      makeRibbon(2.2, 0.026, 0x73d9ff, 0.82, 1.12, 1.11, 0.42, -0.25, 0.1, 5.1),
     ];
 
     const streaks = [];
