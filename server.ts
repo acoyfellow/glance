@@ -319,13 +319,16 @@ function watchHtml() {
     * { box-sizing:border-box; }
     body { margin:0; background:var(--bg); color:var(--text); font:13px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { padding:14px; }
-    .meta { display:grid; grid-template-columns: 34px 180px 1fr 120px; gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; align-items:center; }
-    .ambient-toggle { width:26px; height:26px; border:1px solid var(--line); border-radius:999px; background:radial-gradient(circle at 35% 30%, #ffffff 0 15%, #bfeadc 16% 38%, #6d9ff8 39% 61%, #314b62 62% 100%); cursor:pointer; box-shadow:0 1px 2px rgba(31,41,51,.12); }
-    .ambient-toggle:focus-visible { outline:2px solid var(--hot); outline-offset:2px; }
+    .meta { display:grid; grid-template-columns: 34px 34px 180px 1fr 120px; gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; align-items:center; }
+    .tool-button { width:26px; height:26px; border:1px solid var(--line); border-radius:999px; cursor:pointer; box-shadow:0 1px 2px rgba(31,41,51,.12); }
+    .tool-button:focus-visible { outline:2px solid var(--hot); outline-offset:2px; }
+    .ambient-toggle { background:radial-gradient(circle at 35% 30%, #ffffff 0 15%, #bfeadc 16% 38%, #6d9ff8 39% 61%, #314b62 62% 100%); }
+    .project-toggle { background:linear-gradient(135deg, #ffffff 0 24%, #dbe7ef 25% 42%, #7aa6b8 43% 57%, #f2d27c 58% 75%, #ffffff 76% 100%); }
+    body.project-view .project-toggle { box-shadow:0 0 0 3px rgba(122,166,184,.22), 0 1px 2px rgba(31,41,51,.12); }
     body.ambient-on { overflow:hidden; }
     #ambient { position:fixed; inset:0; width:100vw; height:100vh; z-index:20; opacity:0; pointer-events:none; background:#f6f8f5; transition:opacity 260ms ease; }
     body.ambient-on #ambient { opacity:1; pointer-events:auto; }
-    body.ambient-on table, body.ambient-on .meta > div { visibility:hidden; }
+    body.ambient-on table, body.ambient-on .meta > div, body.ambient-on .project-toggle { visibility:hidden; }
     body.ambient-on .ambient-toggle { position:fixed; top:14px; left:14px; z-index:30; }
     table { width:100%; border-collapse:collapse; background:var(--paper); border:1px solid var(--line); }
     th, td { padding:7px 9px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
@@ -339,6 +342,11 @@ function watchHtml() {
     tr.pulse td { animation:cell-pulse 1200ms ease-out both; }
     .path { font-weight:750; overflow-wrap:anywhere; }
     .path::before { content:""; display:inline-block; width:7px; height:7px; margin-right:8px; border-radius:50%; background:var(--repo, var(--hot)); box-shadow:0 0 0 3px var(--repo-soft, transparent); vertical-align:1px; }
+    .project-name { font-weight:800; }
+    .project-name::before { content:""; display:inline-block; width:9px; height:9px; margin-right:8px; border-radius:50%; background:var(--repo, var(--hot)); box-shadow:0 0 0 3px var(--repo-soft, transparent); vertical-align:1px; }
+    .spark { display:flex; gap:3px; align-items:end; height:18px; min-width:76px; }
+    .spark i { display:block; width:5px; min-height:3px; border-radius:2px 2px 0 0; background:var(--repo); opacity:.34; }
+    .spark i.hotbar { opacity:.9; }
     .muted { color:var(--muted); }
     .age { white-space:nowrap; font-variant-numeric:tabular-nums; }
     @keyframes file-pulse {
@@ -358,9 +366,9 @@ function watchHtml() {
 <body>
   <canvas id="ambient" aria-hidden="true"></canvas>
   <main>
-    <div class="meta"><button class="ambient-toggle" id="ambientToggle" type="button" aria-label="Toggle ambient visualizer"></button><div id="count">loading</div><div>${ROOT}</div><div id="updated"></div></div>
+    <div class="meta"><button class="tool-button ambient-toggle" id="ambientToggle" type="button" aria-label="Toggle ambient visualizer"></button><button class="tool-button project-toggle" id="projectToggle" type="button" aria-label="Toggle project recency"></button><div id="count">loading</div><div>${ROOT}</div><div id="updated"></div></div>
     <table>
-      <thead><tr><th>Updated</th><th>File</th><th>Size</th></tr></thead>
+      <thead id="head"><tr><th>Updated</th><th>File</th><th>Size</th></tr></thead>
       <tbody id="files"><tr><td colspan="3">loading</td></tr></tbody>
     </table>
   </main>
@@ -368,6 +376,8 @@ function watchHtml() {
     const fmt = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
     const seen = new Map();
     const deletedRows = new Map();
+    let projectView = false;
+    let lastData;
     let firstRender = true;
     let audio;
     let audioReadyPinged = false;
@@ -395,6 +405,11 @@ function watchHtml() {
         seedAmbient(mode);
         requestAnimationFrame(drawAmbient);
       }
+    });
+    document.getElementById("projectToggle").addEventListener("click", () => {
+      projectView = !projectView;
+      document.body.classList.toggle("project-view", projectView);
+      if (lastData) render(lastData, true);
     });
     canvas.addEventListener("click", () => {
       mode = (mode + 1) % modes.length;
@@ -679,7 +694,44 @@ function watchHtml() {
       const h = Math.round(m / 60);
       return h + "h";
     }
-    async function render(data) {
+    function projectsFromFiles(files) {
+      const projects = new Map();
+      for (const file of files) {
+        const repo = repoName(file.path);
+        const signal = file.signal || signalForPath(file.path);
+        let project = projects.get(repo);
+        if (!project) {
+          project = { repo, latest: file.mtime, latestIso: file.mtimeIso, files: 0, size: 0, signals: {}, paths: [], activity: Array(12).fill(0) };
+          projects.set(repo, project);
+        }
+        project.files++;
+        project.size += file.size || 0;
+        project.signals[signal] = (project.signals[signal] || 0) + 1;
+        if (project.paths.length < 3) project.paths.push(file.path);
+        if (file.mtime > project.latest) {
+          project.latest = file.mtime;
+          project.latestIso = file.mtimeIso;
+        }
+        const minutes = Math.max(0, Math.floor((Date.now() - file.mtime) / 60000));
+        const bucket = Math.min(11, Math.floor(minutes / 10));
+        project.activity[bucket]++;
+      }
+      return [...projects.values()].sort((a, b) => b.latest - a.latest);
+    }
+    function renderProjects(data) {
+      const projects = projectsFromFiles(data.files);
+      document.getElementById("count").textContent = projects.length + " active projects";
+      document.getElementById("head").innerHTML = "<tr><th>Last Active</th><th>Project</th><th>Files</th></tr>";
+      document.getElementById("files").innerHTML = projects.map((project, i) => {
+        const color = repoColor(project.repo);
+        const dominant = Object.entries(project.signals).sort((a, b) => b[1] - a[1])[0]?.[0] || "source";
+        const max = Math.max(1, ...project.activity);
+        const bars = project.activity.map((count, index) => '<i class="' + (index < 3 ? 'hotbar' : '') + '" style="height:' + Math.max(3, Math.round(18 * count / max)) + 'px"></i>').join("");
+        return '<tr style="--repo:' + color.a + ';--repo-soft:' + color.soft + ';--repo-wash:' + color.wash + '" class="' + dominant + ' ' + (i < 8 ? 'hot ' : '') + '"><td class="age">' + age(project.latest) + ' ago<br><span class="muted">' + fmt.format(new Date(project.latestIso)) + '</span></td><td><div class="project-name">' + project.repo + '</div><div class="muted">' + project.paths.join(" · ") + '</div></td><td><div>' + project.files + '</div><div class="spark">' + bars + '</div></td></tr>';
+      }).join("");
+    }
+    async function render(data, preserveEffects = false) {
+      lastData = data;
       const changed = new Set();
       const changedRepos = new Map();
       const eventList = Array.isArray(data.events) ? data.events : [];
@@ -703,11 +755,17 @@ function watchHtml() {
         seen.set(file.path, file.mtimeIso);
       }
       for (const [path, event] of deletedRows) if (event.expiresAt < now) deletedRows.delete(path);
-      if (changedRepos.size) {
+      if (!preserveEffects && changedRepos.size) {
         let offset = 0;
         for (const event of changedRepos.values()) setTimeout(() => chime(event.repo, event.count, event.kind, event.signal), offset++ * 85);
       }
+      if (projectView) {
+        renderProjects(data);
+        firstRender = false;
+        return;
+      }
       document.getElementById("count").textContent = data.files.length + " recent files";
+      document.getElementById("head").innerHTML = "<tr><th>Updated</th><th>File</th><th>Size</th></tr>";
       document.getElementById("updated").textContent = fmt.format(new Date(data.generatedAt));
       const deleted = [...deletedRows.values()].map((event) => ({ path: event.path, signal: event.signal, mtimeIso: event.mtimeIso, size: event.previousSize || 0, deleted: true }));
       const rows = [...deleted, ...data.files].slice(0, 240);
