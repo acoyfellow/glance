@@ -892,6 +892,7 @@ function orbHtml() {
   <style>
     html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#67b6dc; }
     canvas { display:block; width:100vw; height:100vh; }
+    #memoryCanvas { position:fixed; inset:0; z-index:2; pointer-events:none; }
     .fullscreen-toggle {
       position:fixed; top:14px; right:14px; z-index:10; width:28px; height:28px;
       border:1px solid rgba(255,255,255,.68); border-radius:999px; cursor:pointer;
@@ -923,6 +924,7 @@ function orbHtml() {
 <body>
   <a class="ui-link" href="/watch" aria-label="Return to file watch"></a>
   <button class="fullscreen-toggle" id="fullscreenToggle" type="button" aria-label="Toggle fullscreen"></button>
+  <canvas id="memoryCanvas" aria-hidden="true"></canvas>
   <script type="module">
     import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js";
 
@@ -939,7 +941,22 @@ function orbHtml() {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.12;
+    renderer.domElement.style.position = "fixed";
+    renderer.domElement.style.inset = "0";
+    renderer.domElement.style.zIndex = "1";
     document.body.appendChild(renderer.domElement);
+
+    const memoryCanvas = document.getElementById("memoryCanvas");
+    const memoryCtx = memoryCanvas.getContext("2d");
+    const memoryEvents = [];
+    function resizeMemoryCanvas() {
+      const dpr = Math.min(devicePixelRatio || 1, 2);
+      memoryCanvas.width = Math.floor(innerWidth * dpr);
+      memoryCanvas.height = Math.floor(innerHeight * dpr);
+      memoryCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    resizeMemoryCanvas();
+    addEventListener("resize", resizeMemoryCanvas);
 
     const group = new THREE.Group();
     group.position.set(0.52, -0.32, 0);
@@ -1001,6 +1018,11 @@ function orbHtml() {
         pan: (((hash >>> 20) % 101) - 50) / 100,
         wave: (hash & 1) ? "triangle" : "sine",
       };
+    }
+    function repoColor(repo) {
+      const hash = hashText(repo || "root");
+      const palette = [0xffd52a, 0xff6a1a, 0xe52018, 0x60d7ff, 0xf2a9c8, 0x1a2f55];
+      return palette[hash % palette.length];
     }
     function audioContext() {
       if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
@@ -1293,6 +1315,24 @@ function orbHtml() {
       makeStreak(1.26 + Math.sin(i * 1.7) * 0.19, -1.48 + i * 0.16, 0.42 + (i % 6) * 0.18, i % 3 === 0 ? 0xffee35 : i % 3 === 1 ? 0xff1c00 : 0x64d6ff, 0.22 + (i % 4) * 0.055);
     }
 
+    function addMemoryTrace(repo = ".context", strength = 1, kind = "modify") {
+      if (kind === "wake") return;
+      const hash = hashText(repo);
+      const color = new THREE.Color(kind === "delete" ? 0x17223d : repoColor(repo));
+      memoryEvents.push({
+        born: performance.now(),
+        life: 12000 + Math.min(9000, strength * 900),
+        color: "rgb(" + Math.round(color.r * 255) + "," + Math.round(color.g * 255) + "," + Math.round(color.b * 255) + ")",
+        start: ((hash >>> 4) % 628) / 100,
+        span: 0.9 + Math.min(2.6, strength * 0.18),
+        radius: 160 + (hash % 7) * 34,
+        x: innerWidth * (0.44 + (((hash >>> 12) % 24) - 12) / 100),
+        y: innerHeight * (0.58 + (((hash >>> 18) % 22) - 11) / 100),
+        width: 2 + Math.min(5, strength * 0.45),
+      });
+      while (memoryEvents.length > 18) memoryEvents.shift();
+    }
+
     const bubbleGroup = new THREE.Group();
     group.add(bubbleGroup);
     const bubbleMat = new THREE.MeshPhysicalMaterial({
@@ -1348,6 +1388,7 @@ function orbHtml() {
 
     function machinePulse(strength, repo = ".context", kind = "modify") {
       pulse.value = Math.min(2.4, pulse.value + 0.32 * Math.max(1, strength || 1));
+      addMemoryTrace(repo, strength, kind);
       playChime(repo, strength, kind);
     }
     function observeSnapshot(data) {
@@ -1430,6 +1471,31 @@ function orbHtml() {
       glints.children.forEach((g, i) => {
         g.material.opacity = 0.28 + Math.max(0, Math.sin(t * 1.1 + i)) * 0.38 + pulse.value * 0.08;
       });
+      memoryCtx.clearRect(0, 0, innerWidth, innerHeight);
+      memoryCtx.globalCompositeOperation = "lighter";
+      for (let i = memoryEvents.length - 1; i >= 0; i--) {
+        const event = memoryEvents[i];
+        const age = performance.now() - event.born;
+        const fade = Math.max(0, 1 - age / event.life);
+        if (fade <= 0) {
+          memoryEvents.splice(i, 1);
+          continue;
+        }
+        const drift = age * 0.00008;
+        memoryCtx.globalAlpha = 0.34 * fade * fade;
+        memoryCtx.strokeStyle = event.color;
+        memoryCtx.lineWidth = event.width;
+        memoryCtx.beginPath();
+        memoryCtx.ellipse(event.x, event.y, event.radius + age * 0.006, (event.radius * 0.58) + age * 0.003, -0.18, event.start + drift, event.start + event.span + drift);
+        memoryCtx.stroke();
+        memoryCtx.globalAlpha = 0.18 * fade;
+        memoryCtx.lineWidth = Math.max(1, event.width * 0.45);
+        memoryCtx.beginPath();
+        memoryCtx.ellipse(event.x, event.y, event.radius * 0.72, event.radius * 0.42, -0.18, event.start + event.span * 0.28, event.start + event.span * 0.88);
+        memoryCtx.stroke();
+      }
+      memoryCtx.globalAlpha = 1;
+      memoryCtx.globalCompositeOperation = "source-over";
       renderer.render(scene, camera);
       requestAnimationFrame(animate);
     }
