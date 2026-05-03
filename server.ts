@@ -372,6 +372,16 @@ function watchHtml() {
     main { padding:14px; }
     .meta { display:grid; grid-template-columns: 34px 34px 34px 180px 1fr 120px; gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; align-items:center; }
     .tool-button { width:26px; height:26px; border:1px solid var(--line); border-radius:999px; cursor:pointer; box-shadow:0 1px 2px rgba(31,41,51,.12); }
+    .fullscreen-toggle {
+      position:fixed; top:14px; right:14px; z-index:35; background:rgba(255,255,255,.88);
+    }
+    .fullscreen-toggle::before, .fullscreen-toggle::after {
+      content:""; position:absolute; width:8px; height:8px; border-color:#263746; border-style:solid;
+    }
+    .fullscreen-toggle::before { left:6px; top:6px; border-width:2px 0 0 2px; }
+    .fullscreen-toggle::after { right:6px; bottom:6px; border-width:0 2px 2px 0; }
+    body.is-fullscreen .fullscreen-toggle::before { left:8px; top:8px; border-width:0 2px 2px 0; }
+    body.is-fullscreen .fullscreen-toggle::after { right:8px; bottom:8px; border-width:2px 0 0 2px; }
     a.tool-button { display:block; }
     .tool-button:focus-visible { outline:2px solid var(--hot); outline-offset:2px; }
     .ambient-toggle { background:radial-gradient(circle at 35% 30%, #ffffff 0 15%, #bfeadc 16% 38%, #6d9ff8 39% 61%, #314b62 62% 100%); }
@@ -418,6 +428,7 @@ function watchHtml() {
 </head>
 <body>
   <canvas id="ambient" aria-hidden="true"></canvas>
+  <button class="tool-button fullscreen-toggle" id="fullscreenToggle" type="button" aria-label="Toggle fullscreen"></button>
   <main>
     <div class="meta"><button class="tool-button ambient-toggle" id="ambientToggle" type="button" aria-label="Toggle ambient visualizer"></button><button class="tool-button project-toggle" id="projectToggle" type="button" aria-label="Toggle project recency"></button><a class="tool-button orb-link" href="/orb" aria-label="Open machine orb"></a><div id="count">loading</div><div>${ROOT}</div><div id="updated"></div></div>
     <table>
@@ -443,6 +454,7 @@ function watchHtml() {
     let mode = 0;
     let visualOn = false;
     let lastFrame = 0;
+    let pageTakeover = false;
     function resizeAmbient() {
       const dpr = Math.min(2, devicePixelRatio || 1);
       canvas.width = Math.floor(innerWidth * dpr);
@@ -451,6 +463,30 @@ function watchHtml() {
     }
     resizeAmbient();
     addEventListener("resize", resizeAmbient);
+    const fullscreenToggle = document.getElementById("fullscreenToggle");
+    function syncFullscreenState() {
+      const active = pageTakeover || Boolean(document.fullscreenElement);
+      document.body.classList.toggle("is-fullscreen", active);
+      fullscreenToggle.setAttribute("aria-pressed", active ? "true" : "false");
+    }
+    fullscreenToggle.addEventListener("click", async () => {
+      const next = !(pageTakeover || document.fullscreenElement);
+      pageTakeover = next;
+      try {
+        if (!next && document.fullscreenElement) await document.exitFullscreen();
+        else if (next && !document.fullscreenElement) await document.documentElement.requestFullscreen();
+      } catch {}
+      syncFullscreenState();
+    });
+    document.addEventListener("fullscreenchange", () => {
+      if (!document.fullscreenElement && !pageTakeover) syncFullscreenState();
+    });
+    addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && pageTakeover) {
+        pageTakeover = false;
+        syncFullscreenState();
+      }
+    });
     document.getElementById("ambientToggle").addEventListener("click", () => {
       visualOn = !visualOn;
       document.body.classList.toggle("ambient-on", visualOn);
