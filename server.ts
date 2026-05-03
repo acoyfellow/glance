@@ -216,13 +216,18 @@ const recentFileIgnorePathParts = [
 type ActivityFile = { path: string; mtime: number; mtimeIso: string; size: number };
 type ActivitySignal = "source" | "generated" | "log" | "config" | "secret" | "git" | "context" | "asset";
 type ActivityEvent = { kind: "create" | "modify" | "delete" | "burst"; signal: ActivitySignal; path: string; repo: string; size: number; previousSize?: number; mtimeIso: string; count?: number };
+type ProjectRoot = { repo: string; latest: number; latestIso: string };
 const activityByPath = new Map<string, ActivityFile>();
+const projectRoots = new Map<string, ProjectRoot>();
 const burstWindows = new Map<string, number[]>();
 let activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root: ROOT, files: [] });
 let activityDirty = true;
 function repoForPath(relPath: string) {
   if (relPath.startsWith(".context/")) return ".context";
   return relPath.split("/")[0] || "root";
+}
+function shouldIgnoreProjectRoot(name: string) {
+  return recentFileIgnoreDirs.has(name) || recentFileIgnoreFiles.has(name);
 }
 function signalForPath(relPath: string): ActivitySignal {
   const lower = relPath.toLowerCase();
@@ -250,11 +255,28 @@ function indexRecentFiles(dir = ROOT, depth = 0) {
     const relPath = relative(ROOT, path);
     if (shouldIgnoreRecentPath(relPath, ent.name)) continue;
     if (ent.isDirectory()) {
+      if (depth === 0) indexProjectRoot(path, false);
       indexRecentFiles(path, depth + 1);
       continue;
     }
     if (!ent.isFile()) continue;
     indexOneFile(path, false);
+  }
+}
+function indexProjectRoot(path: string, notify = true) {
+  const relPath = relative(ROOT, path);
+  if (!relPath || relPath.startsWith("..") || relPath.includes("/") || shouldIgnoreProjectRoot(relPath)) return;
+  try {
+    const st = statSync(path);
+    if (!st.isDirectory()) return;
+    projectRoots.set(relPath, { repo: relPath, latest: st.mtimeMs, latestIso: new Date(st.mtimeMs).toISOString() });
+    activityDirty = true;
+    if (notify) broadcastActivity();
+  } catch {
+    if (projectRoots.delete(relPath)) {
+      activityDirty = true;
+      if (notify) broadcastActivity();
+    }
   }
 }
 function indexOneFile(path: string, notify = true) {
@@ -320,6 +342,10 @@ function projectsFromActivity(files: ActivityFile[]) {
     const hours = Math.max(0, Math.floor((now - file.mtime) / 3600000));
     const bucket = Math.min(11, Math.floor(hours / 6));
     project.activity[bucket]++;
+  }
+  for (const root of projectRoots.values()) {
+    if (projects.has(root.repo)) continue;
+    projects.set(root.repo, { repo: root.repo, latest: root.latest, latestIso: root.latestIso, files: 0, size: 0, signals: { source: 0 }, paths: [], activity: Array(12).fill(0) });
   }
   return [...projects.values()].sort((a, b) => b.latest - a.latest);
 }
@@ -832,7 +858,9 @@ indexRecentFiles();
 try {
   watch(ROOT, { recursive: true }, (_event, filename) => {
     if (!filename) return;
-    indexOneFile(join(ROOT, String(filename)));
+    const path = join(ROOT, String(filename));
+    indexProjectRoot(path);
+    indexOneFile(path);
   });
 } catch {}
 rebuild();
