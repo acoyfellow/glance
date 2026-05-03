@@ -291,12 +291,37 @@ function withBurstEvent(event: ActivityEvent): ActivityEvent[] {
 }
 function recentFilesJsonString() {
   if (!activityDirty) return activityCache;
-  const files = [...activityByPath.values()]
-    .sort((a, b) => b.mtime - a.mtime)
-    .slice(0, 240);
-  activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root: ROOT, files }, null, 2);
+  const allFiles = [...activityByPath.values()].sort((a, b) => b.mtime - a.mtime);
+  const files = allFiles.slice(0, 240);
+  const projects = projectsFromActivity(allFiles);
+  activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root: ROOT, files, projects }, null, 2);
   activityDirty = false;
   return activityCache;
+}
+function projectsFromActivity(files: ActivityFile[]) {
+  const projects = new Map<string, { repo: string; latest: number; latestIso: string; files: number; size: number; signals: Record<string, number>; paths: string[]; activity: number[] }>();
+  const now = Date.now();
+  for (const file of files) {
+    const repo = repoForPath(file.path);
+    const signal = signalForPath(file.path);
+    let project = projects.get(repo);
+    if (!project) {
+      project = { repo, latest: file.mtime, latestIso: file.mtimeIso, files: 0, size: 0, signals: {}, paths: [], activity: Array(12).fill(0) };
+      projects.set(repo, project);
+    }
+    project.files++;
+    project.size += file.size || 0;
+    project.signals[signal] = (project.signals[signal] || 0) + 1;
+    if (project.paths.length < 3) project.paths.push(file.path);
+    if (file.mtime > project.latest) {
+      project.latest = file.mtime;
+      project.latestIso = file.mtimeIso;
+    }
+    const hours = Math.max(0, Math.floor((now - file.mtime) / 3600000));
+    const bucket = Math.min(11, Math.floor(hours / 6));
+    project.activity[bucket]++;
+  }
+  return [...projects.values()].sort((a, b) => b.latest - a.latest);
 }
 function activityPayload(events: ActivityEvent[] = []) {
   return JSON.stringify({ ...JSON.parse(recentFilesJsonString()), events });
@@ -719,8 +744,8 @@ function watchHtml() {
       return [...projects.values()].sort((a, b) => b.latest - a.latest);
     }
     function renderProjects(data) {
-      const projects = projectsFromFiles(data.files);
-      document.getElementById("count").textContent = projects.length + " active projects";
+      const projects = Array.isArray(data.projects) ? data.projects : projectsFromFiles(data.files);
+      document.getElementById("count").textContent = projects.length + " projects";
       document.getElementById("head").innerHTML = "<tr><th>Last Active</th><th>Project</th><th>Files</th></tr>";
       document.getElementById("files").innerHTML = projects.map((project, i) => {
         const color = repoColor(project.repo);
