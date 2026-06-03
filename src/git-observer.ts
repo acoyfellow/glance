@@ -3,7 +3,8 @@ import { join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const ROOT = process.env.MACHINE_ROOT ?? "/Users/jcoeyman/cloudflare";
-const DATA_DIR = join(ROOT, ".context/machine-dashboard/data/git-observer");
+const APP_DIR = join(ROOT, "glance");
+const DATA_DIR = join(APP_DIR, "data/git-observer");
 const OUT = join(DATA_DIR, "state.json");
 const HISTORY_DIR = join(DATA_DIR, "history");
 const MAX_DEPTH = Number(process.env.GIT_OBSERVER_MAX_DEPTH ?? 3);
