@@ -19,6 +19,20 @@ local project activity + optional event files
 |---|---|
 | ![Watch view showing recent local project activity](./docs/screenshots/watch.png) | ![Orb ambient activity view](./docs/screenshots/orb.png) |
 
+## What it does
+
+Glance is an ambient working environment: point it at your local projects, then see and hear activity as work happens without giving the app command execution or control privileges.
+
+## Features
+
+| Area | What you see | What you can do |
+|---|---|---|
+| **Watch** | Live recent-file feed with change type and per-project color; project rollup with activity sparklines; git radar showing repo count, attention, and current focus. | Toggle file/project view, enter fullscreen, and hear distinct project activity chimes while agents work. |
+| **Orb** | Ambient animated orb driven by the same activity stream; colored project pulses and lingering traces. | Listen to project-specific tones, switch lava/water and room/buddy modes, tune the surface/motion, and optionally enable local microphone/camera reactions. |
+| **Sound** | Each observed project maps to its own generated tone/pan/timbre; create, modify, delete, burst, generated, log, and secret-like file signals produce different note patterns. | Recognize where and how work is moving without staring at the feed. |
+| **App** | Installable local PWA with Watch and Orb shortcuts; optional event/receipt feed via `contextDir`. | Choose an observed root, run entirely on localhost, and use demo-safe data for screenshots or presentation. |
+| **Privacy** | Filenames, repository state, and configured optional events only. | No command execution, no lock/control actions, no coding-agent history scan, no media upload/persistence. |
+
 ## Run locally
 
 Requires [Bun](https://bun.sh/).
