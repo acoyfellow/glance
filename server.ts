@@ -61,6 +61,21 @@ function pwaHead(title = "Glance") {
 }
 function pwaScript() {
   return `<script>
+    const GLANCE_PREF_KEY = "glance:prefs:v1";
+    function glancePrefs() {
+      try { return JSON.parse(localStorage.getItem(GLANCE_PREF_KEY) || "{}"); } catch { return {}; }
+    }
+    function saveGlancePrefs(patch) {
+      try { localStorage.setItem(GLANCE_PREF_KEY, JSON.stringify({ ...glancePrefs(), ...patch })); } catch {}
+    }
+    function syncWindowControlsOverlay() {
+      const visible = Boolean(navigator.windowControlsOverlay && navigator.windowControlsOverlay.visible);
+      document.documentElement.classList.toggle("window-controls-overlay", visible);
+    }
+    if (navigator.windowControlsOverlay) {
+      syncWindowControlsOverlay();
+      navigator.windowControlsOverlay.addEventListener("geometrychange", syncWindowControlsOverlay);
+    }
     async function machineCheckForUpdate() {
       try {
         const res = await fetch("/api/app-version", { cache: "no-store" });
@@ -121,6 +136,8 @@ function manifestJson() {
     start_url: "/",
     scope: "/",
     display: "standalone",
+    display_override: ["window-controls-overlay", "standalone"],
+    launch_handler: { client_mode: "focus-existing" },
     background_color: "#f4f6f8",
     theme_color: "#f4f6f8",
     orientation: "any",
@@ -135,7 +152,7 @@ function manifestJson() {
   }, null, 2);
 }
 function serviceWorkerJs() {
-  return `const CACHE = "glance-shell-v1";
+  return `const CACHE = "glance-shell-v2";
 const SHELL = ["/", "/orb", "/manifest.webmanifest", "/icon.svg"];
 async function clearMachineCaches() {
   const keys = await caches.keys();
@@ -385,7 +402,11 @@ function watchHtml() {
     :root { color-scheme: light; --font-sans:"Avenir Next", Avenir, "Helvetica Neue", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --font-mono:"SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; --bg:#f4f6f8; --paper:#fff; --line:#d7dee5; --text:#1f2933; --muted:#667085; --hot:#155eef; --glow:#d7f7ea; }
     * { box-sizing:border-box; }
     body { margin:0; overflow-x:hidden; background:var(--bg); color:var(--text); font:13px/1.35 var(--font-sans); }
+    .titlebar { display:flex; align-items:center; height:0; padding:0; overflow:hidden; -webkit-app-region:drag; app-region:drag; }
+    .titlebar .page-nav, .titlebar button, .titlebar a { -webkit-app-region:no-drag; app-region:no-drag; }
+    html.window-controls-overlay .titlebar { height:env(titlebar-area-height, 42px); padding-left:max(12px, env(titlebar-area-x, 12px)); padding-right:max(92px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 100px)))); }
     main { width:min(100%, 1440px); margin:0 auto; padding:14px; }
+    html.window-controls-overlay main > .page-nav { display:none; }
     .meta { display:grid; grid-template-columns: 34px 34px minmax(140px,180px) minmax(0,1fr); gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; align-items:center; min-width:0; }
     .meta > * { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .tool-button { width:26px; height:26px; border:1px solid var(--line); border-radius:999px; cursor:pointer; box-shadow:0 1px 2px rgba(31,41,51,.12); }
@@ -419,6 +440,7 @@ function watchHtml() {
     .fullscreen-toggle {
       position:fixed; top:14px; right:14px; z-index:35; background:rgba(255,255,255,.88);
     }
+    html.window-controls-overlay .fullscreen-toggle { top:max(8px, calc((env(titlebar-area-height, 42px) - 26px) / 2)); right:max(12px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 100px)) + 12px)); }
     .fullscreen-toggle::before, .fullscreen-toggle::after {
       content:""; position:absolute; width:8px; height:8px; border-color:#263746; border-style:solid;
     }
@@ -504,6 +526,7 @@ function watchHtml() {
   </style>
 </head>
 <body>
+  <header class="titlebar"><nav class="page-nav" aria-label="Glance pages"><a href="/" aria-current="page">Watch</a><a href="/orb">Orb</a></nav></header>
   <button class="tool-button fullscreen-toggle" id="fullscreenToggle" type="button" aria-label="Toggle fullscreen"></button>
   <main>
     <nav class="page-nav" aria-label="Glance pages">
@@ -535,6 +558,7 @@ function watchHtml() {
     let lastChime = 0;
     const recentHits = [];
     let pageTakeover = false;
+    let ambientWakeLock = null;
     const fullscreenToggle = document.getElementById("fullscreenToggle");
     function syncFullscreenState() {
       const active = pageTakeover || Boolean(document.fullscreenElement);
@@ -559,6 +583,12 @@ function watchHtml() {
         syncFullscreenState();
       }
     });
+    async function restoreAmbientWakeLock() {
+      if (!glancePrefs().ambient || !navigator.wakeLock || document.visibilityState !== "visible") return;
+      try { ambientWakeLock = await navigator.wakeLock.request("screen"); } catch {}
+    }
+    document.addEventListener("visibilitychange", restoreAmbientWakeLock);
+    restoreAmbientWakeLock();
     document.getElementById("projectToggle").addEventListener("click", () => {
       projectView = !projectView;
       document.body.classList.toggle("project-view", projectView);
@@ -843,6 +873,10 @@ function orbHtml() {
     :root { --font-sans:"Avenir Next", Avenir, "Helvetica Neue", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --font-mono:"SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; }
     * { box-sizing:border-box; }
     html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#63b7dc; font-family:var(--font-sans); }
+    .titlebar { position:fixed; top:0; left:0; right:0; z-index:20; display:flex; align-items:center; height:0; overflow:hidden; -webkit-app-region:drag; app-region:drag; }
+    .titlebar .page-nav, .titlebar button, .titlebar a { -webkit-app-region:no-drag; app-region:no-drag; }
+    html.window-controls-overlay .titlebar { height:env(titlebar-area-height, 42px); padding-left:max(12px, env(titlebar-area-x, 12px)); padding-right:max(92px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 100px)))); }
+    html.window-controls-overlay body > .page-nav { display:none; }
     body.buddy-mode { background:transparent; }
     body.buddy-mode::before {
       content:""; position:fixed; inset:8px; z-index:0; pointer-events:none;
@@ -874,6 +908,10 @@ function orbHtml() {
     body.is-fullscreen .fullscreen-toggle::after { right:9px; bottom:9px; border-width:2px 0 0 2px; }
     body.is-fullscreen .page-nav { opacity:.62; }
     .fullscreen-toggle:focus-visible { outline:2px solid #fff; outline-offset:3px; }
+    html.window-controls-overlay .fullscreen-toggle { top:max(7px, calc((env(titlebar-area-height, 42px) - 28px) / 2)); right:max(12px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 100px)) + 12px)); }
+    html.window-controls-overlay .vortex-toggle { top:calc(env(titlebar-area-height, 42px) + 10px); }
+    html.window-controls-overlay .ambient-toggle { top:calc(env(titlebar-area-height, 42px) + 10px); }
+    html.window-controls-overlay .gesture-toggle { top:calc(env(titlebar-area-height, 42px) + 10px); }
     .page-nav {
       position:fixed; top:14px; left:14px; right:54px; z-index:10; display:inline-flex; width:max-content; max-width:calc(100vw - 68px); height:42px;
       align-items:center; gap:4px; padding:4px; overflow-x:auto; overscroll-behavior:contain; scrollbar-width:none;
@@ -886,6 +924,15 @@ function orbHtml() {
       color:#264257; text-decoration:none; padding:0 12px; border-radius:999px; white-space:nowrap;
     }
     .page-nav a[aria-current="page"] { background:rgba(32,57,78,.84); color:#fff; box-shadow:0 5px 14px rgba(20,52,79,.18); }
+    .ambient-toggle {
+      position:fixed; top:52px; right:52px; z-index:10; width:28px; height:28px;
+      border:1px solid rgba(255,255,255,.68); border-radius:999px; cursor:pointer;
+      color:#264257; font:500 18px/1 var(--font-sans); background:rgba(255,255,255,.52);
+      box-shadow:0 8px 22px rgba(20,52,79,.16); backdrop-filter:blur(12px);
+    }
+    body.ambient-mode .ambient-toggle { background:rgba(255,236,174,.78); }
+    body.ambient-mode .page-nav, body.ambient-mode .vortex-toggle, body.ambient-mode .gesture-toggle { opacity:.22; transition:opacity 200ms ease; }
+    body.ambient-mode .page-nav:hover, body.ambient-mode .vortex-toggle:hover, body.ambient-mode .gesture-toggle:hover { opacity:1; }
     .gesture-toggle {
       position:fixed; top:52px; right:14px; z-index:10; width:28px; height:28px;
       border:1px solid rgba(255,255,255,.68); border-radius:999px; cursor:pointer;
@@ -1021,11 +1068,13 @@ function orbHtml() {
   </style>
 </head>
 <body>
+  <header class="titlebar"><nav class="page-nav" aria-label="Glance pages"><a href="/">Watch</a><a href="/orb" aria-current="page">Orb</a></nav></header>
   <nav class="page-nav" aria-label="Glance pages">
     <a href="/">Watch</a>
     <a href="/orb" aria-current="page">Orb</a>
   </nav>
   <button class="fullscreen-toggle" id="fullscreenToggle" type="button" aria-label="Toggle fullscreen"></button>
+  <button class="ambient-toggle" id="ambientToggle" type="button" aria-label="Toggle ambient mode">◦</button>
   <button class="vortex-toggle" id="vortexToggle" type="button" aria-label="Show vortex controls">~</button>
   <button class="gesture-toggle" id="gestureToggle" type="button" aria-label="Show gesture help">?</button>
   <div class="vortex-panel" id="vortexPanel" aria-hidden="true">
@@ -1443,9 +1492,11 @@ function orbHtml() {
     let lastObservedMtime = 0;
     let firstSnapshot = true;
     let pageTakeover = false;
+    let wakeLock = null;
     let lastHandShape = 1.5;
 
     const fullscreenToggle = document.getElementById("fullscreenToggle");
+    const ambientToggle = document.getElementById("ambientToggle");
     const gestureToggle = document.getElementById("gestureToggle");
     const gesturePanel = document.getElementById("gesturePanel");
     const gestureFeedback = document.getElementById("gestureFeedback");
@@ -1456,7 +1507,7 @@ function orbHtml() {
       head: true,
       stillness: true,
     };
-    const PREF_KEY = "machineOrbSettings:v1";
+    const PREF_KEY = "glance:orb:prefs:v1";
     const savedPrefs = (() => {
       try { return JSON.parse(localStorage.getItem(PREF_KEY) || "{}"); } catch { return {}; }
     })();
@@ -1464,6 +1515,20 @@ function orbHtml() {
       Object.assign(savedPrefs, patch);
       try { localStorage.setItem(PREF_KEY, JSON.stringify(savedPrefs)); } catch {}
     }
+    async function syncAmbientMode() {
+      const ambient = Boolean(savedPrefs.ambient);
+      document.body.classList.toggle("ambient-mode", ambient);
+      ambientToggle.setAttribute("aria-pressed", ambient ? "true" : "false");
+      if (ambient && navigator.wakeLock && document.visibilityState === "visible" && !wakeLock) {
+        try { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => wakeLock = null); } catch {}
+      } else if (!ambient && wakeLock) {
+        try { await wakeLock.release(); } catch {}
+        wakeLock = null;
+      }
+    }
+    ambientToggle.addEventListener("click", () => { savePrefs({ ambient: !savedPrefs.ambient }); syncAmbientMode(); });
+    document.addEventListener("visibilitychange", syncAmbientMode);
+    syncAmbientMode();
     [
       ["RightHand", "rightHand"],
       ["LeftHand", "leftHand"],
