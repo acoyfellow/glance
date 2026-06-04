@@ -1,13 +1,12 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
+import { appDir, loadConfig, type GlanceConfig } from "./config";
 
-const ROOT = process.env.MACHINE_ROOT ?? "/Users/jcoeyman/cloudflare";
-const APP_DIR = join(ROOT, "glance");
-const DATA_DIR = join(APP_DIR, "data/git-observer");
+const DATA_DIR = join(appDir(import.meta.url), "../data/git-observer");
 const OUT = join(DATA_DIR, "state.json");
 const HISTORY_DIR = join(DATA_DIR, "history");
-const MAX_DEPTH = Number(process.env.GIT_OBSERVER_MAX_DEPTH ?? 3);
+const MAX_DEPTH = Number(process.env.GLANCE_GIT_MAX_DEPTH ?? process.env.GIT_OBSERVER_MAX_DEPTH ?? 3);
 const SKIP = new Set(["node_modules", ".next", ".svelte-kit", "dist", "build", ".wrangler", ".turbo", ".cache"]);
 
 type RepoState = {
@@ -57,7 +56,7 @@ function findRepos(dir: string, depth = 0, out: string[] = []): string[] {
   try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   for (const ent of entries) {
     if (!ent.isDirectory() || SKIP.has(ent.name)) continue;
-    if (ent.name.startsWith(".") && ent.name !== ".context") continue;
+    if (ent.name.startsWith(".")) continue;
     findRepos(join(dir, ent.name), depth + 1, out);
   }
   return out;
@@ -67,7 +66,7 @@ function git(repo: string, args: string[]) {
   return spawnSync("git", args, { cwd: repo, encoding: "utf8", timeout: 4500 });
 }
 
-function summarize(repo: string): RepoState {
+function summarize(root: string, repo: string): RepoState {
   const porcelain = git(repo, ["status", "--porcelain=v1", "--branch"]);
   const lines = porcelain.stdout.split(/\r?\n/).filter(Boolean);
   const branchLine = lines.find((line) => line.startsWith("## ")) ?? "## unknown";
@@ -81,7 +80,7 @@ function summarize(repo: string): RepoState {
   const classification = classify(changes);
   const lastEdit = lastEdited(repo, changes);
   return {
-    path: relative(ROOT, repo) || ".",
+    path: relative(root, repo) || ".",
     branch,
     head,
     dirty: changes.length,
@@ -146,17 +145,18 @@ function classify(changes: string[]): Pick<RepoState, "attention" | "noiseReason
   return { attention: "low", noiseReason: null };
 }
 
-export function scanGitObserver() {
+export function scanGitObserver(config: GlanceConfig = loadConfig(import.meta.url)) {
+  const root = config.root;
   mkdirSync(DATA_DIR, { recursive: true });
   mkdirSync(HISTORY_DIR, { recursive: true });
   const previous = readPrevious();
-  const repos = findRepos(ROOT)
-    .sort((a, b) => relative(ROOT, a).localeCompare(relative(ROOT, b)))
-    .map(summarize)
+  const repos = findRepos(root)
+    .sort((a, b) => relative(root, a).localeCompare(relative(root, b)))
+    .map((repo) => summarize(root, repo))
     .sort((a, b) => b.focusScore - a.focusScore || attentionRank(b) - attentionRank(a) || b.dirty - a.dirty || a.path.localeCompare(b.path));
   const state: ObserverState = {
     generatedAt: new Date().toISOString(),
-    root: ROOT,
+    root,
     mode: ".git observer",
     repoCount: repos.length,
     dirtyCount: repos.filter((repo) => repo.dirty > 0).length,

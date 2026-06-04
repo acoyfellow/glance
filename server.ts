@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync, readdirSync, statSync, watch } from "node:fs";
-import { basename, dirname, join, normalize, relative } from "node:path";
+import { dirname, join, normalize, relative } from "node:path";
 import { spawnSync } from "node:child_process";
+import { loadConfig } from "./src/config";
 
-const ROOT = process.env.MACHINE_ROOT ?? "/Users/jcoeyman/cloudflare";
+const config = loadConfig(import.meta.url);
+const ROOT = config.root;
 const DIR = dirname(new URL(import.meta.url).pathname);
 const DIST = join(DIR, "dist");
 const PORT = Number(process.env.MACHINE_DASHBOARD_PORT ?? 8787);
@@ -17,23 +19,6 @@ let lastBroadcast = "";
 let lastBroadcastAt = 0;
 const allowedHosts = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
 const allowedOrigins = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
-const projectPaths: Record<string, string> = {
-  "cloudshell": join(ROOT, "cloudshell"),
-  "filepath": join(ROOT, "filepath"),
-  "deja": join(ROOT, "deja"),
-  "guardrail": join(ROOT, "guardrail"),
-  "capa": join(ROOT, "capa"),
-  "lab": join(ROOT, "lab"),
-  "cloudterm": join(ROOT, "cloudterm"),
-  "cloudeval": join(ROOT, "cloudeval"),
-  "unsurf": join(ROOT, "unsurf"),
-  "contributron": join(ROOT, "contributron"),
-  "hermes": join(ROOT, "hermes"),
-  "t2t": join(ROOT, "t2t"),
-  "mcpu": join(ROOT, "mcpu"),
-  "coey.dev": join(ROOT, "coey.dev"),
-  ".context": ROOT,
-};
 
 function allowed(req: Request) {
   const host = req.headers.get("host") ?? "";
@@ -199,65 +184,6 @@ function iconSvg() {
   <path d="M166 333c68 63 170 58 231-5" fill="none" stroke="#381b12" stroke-opacity=".28" stroke-width="20" stroke-linecap="round"/>
 </svg>`;
 }
-type ConversationItem = { source: "OpenCode" | "Pi" | "Codex"; id: string; title: string; cwd: string; updatedAt: number; updatedIso: string; preview: string; path: string };
-function cleanConversationText(value: unknown) {
-  return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, 220);
-}
-function jsonLines(path: string, maxLines = 80) {
-  try { return readFileSync(path, "utf8").trim().split("\n").slice(-maxLines).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean); } catch { return []; }
-}
-function recentFilesUnder(root: string, accept: (path: string) => boolean, limit: number) {
-  const out: { path: string; mtime: number }[] = [];
-  function walk(dir: string, depth = 0) {
-    if (!existsSync(dir) || depth > 5) return;
-    try {
-      for (const ent of readdirSync(dir, { withFileTypes: true })) {
-        const path = join(dir, ent.name);
-        if (ent.isDirectory()) walk(path, depth + 1);
-        else if (ent.isFile() && accept(path)) out.push({ path, mtime: statSync(path).mtimeMs });
-      }
-    } catch {}
-  }
-  walk(root);
-  return out.sort((a, b) => b.mtime - a.mtime).slice(0, limit);
-}
-function openCodeConversations(): ConversationItem[] {
-  const db = "/Users/jcoeyman/.local/share/opencode/opencode.db";
-  if (!existsSync(db)) return [];
-  const sql = "select id,title,directory,time_updated from session where time_archived is null order by time_updated desc limit 18;";
-  const result = spawnSync("sqlite3", ["-json", db, sql], { encoding: "utf8", timeout: 4000 });
-  try {
-    return JSON.parse(result.stdout || "[]").map((row: any) => ({
-      source: "OpenCode", id: row.id, title: cleanConversationText(row.title) || row.id, cwd: cleanConversationText(row.directory),
-      updatedAt: Number(row.time_updated || 0), updatedIso: new Date(Number(row.time_updated || 0)).toISOString(),
-      preview: cleanConversationText(row.directory), path: db,
-    }));
-  } catch { return []; }
-}
-function piConversations(): ConversationItem[] {
-  const root = "/Users/jcoeyman/.pi/agent/sessions";
-  return recentFilesUnder(root, (path) => path.endsWith(".jsonl"), 18).map(({ path, mtime }) => {
-    const lines: any[] = jsonLines(path, 120);
-    const session = lines.find((line) => line.type === "session") || {};
-    const users = lines.filter((line) => line.type === "message" && line.message?.role === "user");
-    const text = users.at(-1)?.message?.content?.find?.((part: any) => part.type === "text")?.text || users.at(-1)?.message?.content?.[0]?.text || "";
-    return { source: "Pi", id: session.id || basename(path, ".jsonl"), title: cleanConversationText(text) || basename(path, ".jsonl"), cwd: cleanConversationText(session.cwd || dirname(path).split("/").at(-1)), updatedAt: mtime, updatedIso: new Date(mtime).toISOString(), preview: cleanConversationText(text), path };
-  });
-}
-function codexConversations(): ConversationItem[] {
-  const root = "/Users/jcoeyman/.codex/sessions";
-  return recentFilesUnder(root, (path) => path.endsWith(".jsonl"), 18).map(({ path, mtime }) => {
-    const lines: any[] = jsonLines(path, 180);
-    const meta = lines.find((line) => line.type === "session_meta")?.payload || {};
-    const users = lines.filter((line) => line.type === "response_item" && line.payload?.type === "message" && line.payload?.role === "user");
-    const text = users.at(-1)?.payload?.content?.find?.((part: any) => part.type === "input_text")?.text || "";
-    return { source: "Codex", id: meta.id || basename(path, ".jsonl"), title: cleanConversationText(text) || basename(path, ".jsonl"), cwd: cleanConversationText(meta.cwd), updatedAt: mtime, updatedIso: new Date(mtime).toISOString(), preview: cleanConversationText(text), path };
-  });
-}
-function conversationsJsonString() {
-  const conversations = [...openCodeConversations(), ...piConversations(), ...codexConversations()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 48);
-  return JSON.stringify({ generatedAt: new Date().toISOString(), conversations, counts: conversations.reduce((counts: Record<string, number>, item) => (counts[item.source] = (counts[item.source] || 0) + 1, counts), {}) });
-}
 const recentFileIgnoreDirs = new Set([".git", "node_modules", "dist", "build", ".next", ".svelte-kit", ".wrangler", ".turbo", ".alchemy", "coverage", ".cache", ".parcel-cache", ".vite", ".jest", ".nyc_output", ".yarn/cache", ".yarn/unplugged"]);
 const recentFileIgnoreFiles = new Set([".DS_Store", "dashboard.json", "playwright.env", ".pnp.cjs", ".pnp.loader.mjs", "install-state.gz"]);
 const recentFileIgnorePathParts = [
@@ -285,7 +211,6 @@ let activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root
 let activityDirty = true;
 let activityBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
 function repoForPath(relPath: string) {
-  if (relPath.startsWith(".context/")) return ".context";
   return relPath.split("/")[0] || "root";
 }
 function shouldIgnoreProjectRoot(name: string) {
@@ -300,7 +225,6 @@ function signalForPath(relPath: string): ActivitySignal {
   if (lower.includes("/dist/") || lower.includes("/build/") || lower.includes("/.astro/") || lower.includes("/public/artifacts/") || name.endsWith(".lock")) return "generated";
   if (name.endsWith(".toml") || name.endsWith(".json") || name.endsWith(".jsonc") || name.endsWith(".yaml") || name.endsWith(".yml") || name.endsWith(".config.ts") || name.endsWith(".config.js")) return "config";
   if (/\.(png|jpe?g|gif|webp|svg|mp3|wav|mp4|mov|bin|wasm)$/i.test(name)) return "asset";
-  if (lower.startsWith(".context/") || lower.includes("/.context/")) return "context";
   return "source";
 }
 function shouldIgnoreRecentPath(relPath: string, name = relPath.split("/").at(-1) || relPath) {
@@ -458,7 +382,7 @@ function watchHtml() {
   <title>Glance</title>
   ${pwaHead("Glance")}
   <style>
-    :root { color-scheme: light; --font-sans:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --bg:#f4f6f8; --paper:#fff; --line:#d7dee5; --text:#1f2933; --muted:#667085; --hot:#155eef; --glow:#d7f7ea; }
+    :root { color-scheme: light; --font-sans:"Avenir Next", Avenir, "Helvetica Neue", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --font-mono:"SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; --bg:#f4f6f8; --paper:#fff; --line:#d7dee5; --text:#1f2933; --muted:#667085; --hot:#155eef; --glow:#d7f7ea; }
     * { box-sizing:border-box; }
     body { margin:0; overflow-x:hidden; background:var(--bg); color:var(--text); font:13px/1.35 var(--font-sans); }
     main { width:min(100%, 1440px); margin:0 auto; padding:14px; }
@@ -468,7 +392,7 @@ function watchHtml() {
     .machine-strip { display:grid; grid-template-columns: 38px minmax(190px,1.5fr) minmax(120px,.65fr) minmax(120px,.75fr) max-content; gap:6px; margin-bottom:8px; align-items:center; min-height:42px; padding:5px; background:rgba(255,255,255,.76); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(31,41,51,.05); }
     .machine-card { min-width:0; padding:0 8px; border-left:1px solid rgba(215,222,229,.72); }
     .machine-card:first-child { border-left:0; padding:0; display:flex; justify-content:center; }
-    .machine-card span { display:block; color:var(--muted); font-size:9px; line-height:1; font-weight:850; text-transform:uppercase; margin-bottom:3px; }
+    .machine-card span { display:block; color:var(--muted); font-size:9px; line-height:1; font-weight:600; letter-spacing:.08em; text-transform:uppercase; margin-bottom:3px; }
     .machine-card b { display:block; color:var(--text); font-size:12px; line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .machine-card.activity b { white-space:nowrap; display:block; }
     .machine-card.observer span, .machine-card.observer b { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
@@ -478,7 +402,7 @@ function watchHtml() {
     .machine-updated { min-width:0; padding:0 8px; border-left:1px solid rgba(215,222,229,.72); color:var(--muted); font-size:11px; font-weight:750; white-space:nowrap; }
     .page-nav { display:inline-flex; align-items:center; gap:4px; max-width:calc(100% - 42px); min-height:42px; margin-bottom:10px; padding:4px; overflow-x:auto; border:1px solid rgba(215,222,229,.92); border-radius:999px; background:rgba(255,255,255,.72); box-shadow:0 8px 24px rgba(31,41,51,.07); scrollbar-width:none; }
     .page-nav::-webkit-scrollbar { display:none; }
-    .page-nav a { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; height:32px; border-radius:999px; color:#344054; padding:0 12px; font:850 12px/1 var(--font-sans); text-decoration:none; white-space:nowrap; }
+    .page-nav a { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; height:32px; border-radius:999px; color:#344054; padding:0 12px; font:600 12px/1 var(--font-sans); text-decoration:none; white-space:nowrap; }
     .page-nav a[aria-current="page"] { background:#1f2933; color:#fff; box-shadow:0 5px 14px rgba(31,41,51,.16); }
     .machine-question { display:none; margin:-2px 0 10px; background:#fff8e5; border:1px solid #edd28a; border-radius:8px; padding:10px; }
     .machine-question.is-open { display:block; }
@@ -486,7 +410,7 @@ function watchHtml() {
     .machine-question pre { margin:0 0 8px; max-height:170px; overflow:auto; white-space:pre-wrap; color:#3d2b00; font:12px/1.35 var(--font-sans); }
     .machine-question textarea { width:100%; min-height:72px; resize:vertical; border:1px solid #d7b55f; border-radius:6px; padding:8px; font:13px/1.35 var(--font-sans); }
     .machine-question .question-actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
-    .machine-question button { border:1px solid var(--line); border-radius:6px; background:#fff; color:#344054; padding:7px 9px; font:800 12px/1 var(--font-sans); cursor:pointer; }
+    .machine-question button { border:1px solid var(--line); border-radius:6px; background:#fff; color:#344054; padding:7px 9px; font:600 12px/1 var(--font-sans); cursor:pointer; }
     .machine-question button.primary { background:#9a6700; border-color:#9a6700; color:#fff; }
     .machine-question small { display:block; margin-top:7px; color:#7a4d00; }
     .state-running { color:#177245 !important; }
@@ -509,10 +433,8 @@ function watchHtml() {
     a.tool-button { display:block; }
     .tool-button:focus-visible { outline:2px solid var(--hot); outline-offset:2px; }
     .project-toggle { background:linear-gradient(135deg, #ffffff 0 24%, #dbe7ef 25% 42%, #7aa6b8 43% 57%, #f2d27c 58% 75%, #ffffff 76% 100%); }
-    .conversation-toggle { background:radial-gradient(circle at 35% 32%, #ffffff 0 12%, #d9f7ff 13% 28%, #4ca6ff 29% 52%, #253b80 53% 76%, #ffd76d 77% 100%); }
     body.project-view .project-toggle { box-shadow:0 0 0 3px rgba(122,166,184,.22), 0 1px 2px rgba(31,41,51,.12); }
-    body.conversation-view .conversation-toggle { box-shadow:0 0 0 3px rgba(76,166,255,.24), 0 1px 2px rgba(31,41,51,.12); }
-    .source-pill { display:inline-flex; border-radius:999px; padding:3px 7px; background:var(--repo-wash); color:#344054; font-size:11px; font-weight:850; }
+    .source-pill { display:inline-flex; border-radius:999px; padding:3px 7px; background:var(--repo-wash); color:#344054; font-size:11px; font-weight:600; }
     table { width:100%; border-collapse:collapse; background:var(--paper); border:1px solid var(--line); table-layout:auto; }
     th, td { padding:7px 9px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
     th { position:sticky; top:0; background:#f9fafb; z-index:1; color:var(--muted); font-size:11px; text-transform:uppercase; }
@@ -525,7 +447,7 @@ function watchHtml() {
     tr.pulse td { animation:cell-pulse 1200ms ease-out both; }
     .path { font-weight:750; overflow-wrap:anywhere; }
     .path::before { content:""; display:inline-block; width:7px; height:7px; margin-right:8px; border-radius:50%; background:var(--repo, var(--hot)); box-shadow:0 0 0 3px var(--repo-soft, transparent); vertical-align:1px; }
-    .project-name { font-weight:800; }
+    .project-name { font-weight:600; }
     .project-name::before { content:""; display:inline-block; width:9px; height:9px; margin-right:8px; border-radius:50%; background:var(--repo, var(--hot)); box-shadow:0 0 0 3px var(--repo-soft, transparent); vertical-align:1px; }
     .spark { display:flex; gap:3px; align-items:end; height:18px; min-width:76px; }
     .spark i { display:block; width:5px; min-height:3px; border-radius:2px 2px 0 0; background:var(--repo); opacity:.34; }
@@ -561,7 +483,7 @@ function watchHtml() {
       tr.hot td:first-child { border-left:0; box-shadow:inset 3px 0 0 var(--repo, var(--hot)); }
       td { display:grid; grid-template-columns:minmax(76px,28%) minmax(0,1fr); gap:8px; padding:7px 9px; border-bottom:1px solid var(--line); }
       td:last-child { border-bottom:0; }
-      td::before { content:attr(data-label); color:var(--muted); font-size:10px; font-weight:850; text-transform:uppercase; }
+      td::before { content:attr(data-label); color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; }
       .spark { min-width:0; width:100%; }
     }
     @media (max-width: 560px) {
@@ -588,7 +510,7 @@ function watchHtml() {
       <a href="/" aria-current="page">Watch</a>
       <a href="/orb">Orb</a>
     </nav>
-    <div class="meta"><button class="tool-button project-toggle" id="projectToggle" type="button" aria-label="Toggle project recency"></button><button class="tool-button conversation-toggle" id="conversationToggle" type="button" aria-label="Toggle active conversations observation tower"></button><div id="count">loading</div><div>${ROOT}</div></div>
+    <div class="meta"><button class="tool-button project-toggle" id="projectToggle" type="button" aria-label="Toggle project recency"></button><div id="count">loading</div><div>${ROOT}</div></div>
     <section class="machine-strip" aria-live="polite">
       <div class="machine-card observer"><i class="observer-indicator" aria-hidden="true"></i><span>Observer</span><b id="machineState" class="state-running">loading</b></div>
       <div class="machine-card activity"><span>Latest Signal</span><b id="machineActivity">loading</b></div>
@@ -606,7 +528,6 @@ function watchHtml() {
     const seen = new Map();
     const deletedRows = new Map();
     let projectView = false;
-    let conversationView = false;
     let lastData;
     let firstRender = true;
     let audio;
@@ -614,7 +535,6 @@ function watchHtml() {
     let lastChime = 0;
     const recentHits = [];
     let pageTakeover = false;
-    let dashboardData = null;
     const fullscreenToggle = document.getElementById("fullscreenToggle");
     function syncFullscreenState() {
       const active = pageTakeover || Boolean(document.fullscreenElement);
@@ -641,18 +561,8 @@ function watchHtml() {
     });
     document.getElementById("projectToggle").addEventListener("click", () => {
       projectView = !projectView;
-      if (projectView) conversationView = false;
       document.body.classList.toggle("project-view", projectView);
-      document.body.classList.toggle("conversation-view", conversationView);
       if (lastData) render(lastData, true);
-    });
-    document.getElementById("conversationToggle").addEventListener("click", async () => {
-      conversationView = !conversationView;
-      if (conversationView) projectView = false;
-      document.body.classList.toggle("project-view", projectView);
-      document.body.classList.toggle("conversation-view", conversationView);
-      if (conversationView) await renderConversations();
-      else if (lastData) render(lastData, true);
     });
     function audioContext() {
       if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
@@ -664,7 +574,7 @@ function watchHtml() {
         if (ctx.state !== "running") await ctx.resume();
         if (ctx.state === "running" && !audioReadyPinged) {
           audioReadyPinged = true;
-          const tone = repoTone(".context");
+          const tone = repoTone("root");
           note(ctx, ctx.destination, tone, ctx.currentTime, tone.base * 0.7, 0.008, 0.09);
         }
       } catch {}
@@ -672,7 +582,6 @@ function watchHtml() {
     addEventListener("pointerdown", wakeAudio);
     addEventListener("keydown", wakeAudio);
     function repoName(path) {
-      if (path.startsWith(".context/")) return ".context";
       return path.split("/")[0] || "root";
     }
     function hashText(text) {
@@ -720,11 +629,9 @@ function watchHtml() {
       if (lower.includes("/dist/") || lower.includes("/build/") || lower.includes("/.astro/") || lower.includes("/public/artifacts/") || name.endsWith(".lock")) return "generated";
       if (name.endsWith(".toml") || name.endsWith(".json") || name.endsWith(".jsonc") || name.endsWith(".yaml") || name.endsWith(".yml") || name.endsWith(".config.ts") || name.endsWith(".config.js")) return "config";
       if (/\.(png|jpe?g|gif|webp|svg|mp3|wav|mp4|mov|bin|wasm)$/i.test(name)) return "asset";
-      if (lower.startsWith(".context/") || lower.includes("/.context/")) return "context";
-      return "source";
+          return "source";
     }
     function renderMachine(data) {
-      dashboardData = data;
       const stateEl = document.getElementById("machineState");
       const activityEl = document.getElementById("machineActivity");
       stateEl.className = "state-running";
@@ -859,24 +766,11 @@ function watchHtml() {
         return '<tr style="--repo:' + color.a + ';--repo-soft:' + color.soft + ';--repo-wash:' + color.wash + '" class="' + dominant + ' ' + (i < 8 ? 'hot ' : '') + '"><td class="age" data-label="Last Active">' + age(project.latest) + ' ago<br><span class="muted">' + fmt.format(new Date(project.latestIso)) + '</span></td><td data-label="Project"><div class="project-name">' + project.repo + '</div><div class="muted">' + project.paths.join(" · ") + '</div></td><td data-label="Files"><div>' + project.files + '</div><div class="spark">' + bars + '</div></td></tr>';
       }).join("");
     }
-    async function renderConversations() {
-      const res = await fetch("/api/conversations", { cache: "no-store" });
-      const data = await res.json();
-      const convos = Array.isArray(data.conversations) ? data.conversations : [];
-      document.getElementById("count").textContent = convos.length + " active conversations";
-      document.getElementById("updated").textContent = "Updated " + fmt.format(new Date(data.generatedAt));
-      document.getElementById("head").innerHTML = "<tr><th>Last Active</th><th>Conversation</th><th>Source</th></tr>";
-      document.getElementById("files").innerHTML = convos.map((item, i) => {
-        const color = repoColor(item.source);
-        return '<tr style="--repo:' + color.a + ';--repo-soft:' + color.soft + ';--repo-wash:' + color.wash + '" class="' + (i < 9 ? 'hot ' : '') + '"><td class="age" data-label="Last Active">' + age(item.updatedAt) + ' ago<br><span class="muted">' + fmt.format(new Date(item.updatedIso)) + '</span></td><td data-label="Conversation"><div class="project-name">' + escapeHtml(item.title) + '</div><div class="muted">' + escapeHtml(item.cwd || item.path) + '</div>' + (item.preview && item.preview !== item.title ? '<div>' + escapeHtml(item.preview) + '</div>' : '') + '</td><td data-label="Source"><span class="source-pill">' + escapeHtml(item.source) + '</span></td></tr>';
-      }).join("") || '<tr><td colspan="3">No recent conversations found.</td></tr>';
-    }
     function escapeHtml(value) {
       return String(value || "").replace(/[&<>"']/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[char]));
     }
     async function render(data, preserveEffects = false) {
       lastData = data;
-      if (conversationView) return renderConversations();
       const changed = new Set();
       const changedRepos = new Map();
       const eventList = Array.isArray(data.events) ? data.events : [];
@@ -946,8 +840,9 @@ function orbHtml() {
   <title>Glance Orb</title>
   ${pwaHead("Glance Orb")}
   <style>
+    :root { --font-sans:"Avenir Next", Avenir, "Helvetica Neue", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --font-mono:"SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; }
     * { box-sizing:border-box; }
-    html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#63b7dc; }
+    html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#63b7dc; font-family:var(--font-sans); }
     body.buddy-mode { background:transparent; }
     body.buddy-mode::before {
       content:""; position:fixed; inset:8px; z-index:0; pointer-events:none;
@@ -983,7 +878,7 @@ function orbHtml() {
       position:fixed; top:14px; left:14px; right:54px; z-index:10; display:inline-flex; width:max-content; max-width:calc(100vw - 68px); height:42px;
       align-items:center; gap:4px; padding:4px; overflow-x:auto; overscroll-behavior:contain; scrollbar-width:none;
       border:1px solid rgba(255,255,255,.68); border-radius:999px; background:rgba(255,255,255,.54);
-      box-shadow:0 8px 22px rgba(20,52,79,.14); backdrop-filter:blur(12px); font:800 12px/1 system-ui,sans-serif;
+      box-shadow:0 8px 22px rgba(20,52,79,.14); backdrop-filter:blur(12px); font:600 12px/1 var(--font-sans);
     }
     .page-nav::-webkit-scrollbar { display:none; }
     .page-nav a {
@@ -994,7 +889,7 @@ function orbHtml() {
     .gesture-toggle {
       position:fixed; top:52px; right:14px; z-index:10; width:28px; height:28px;
       border:1px solid rgba(255,255,255,.68); border-radius:999px; cursor:pointer;
-      color:#264257; font:700 16px/1 system-ui,sans-serif; background:rgba(255,255,255,.52);
+      color:#264257; font:600 16px/1 var(--font-sans); background:rgba(255,255,255,.52);
       box-shadow:0 8px 22px rgba(20,52,79,.16); backdrop-filter:blur(12px);
     }
     body.presence-armed .gesture-toggle { background:rgba(255,244,185,.72); box-shadow:0 0 0 3px rgba(255,230,98,.2), 0 8px 22px rgba(20,52,79,.16); }
@@ -1003,7 +898,7 @@ function orbHtml() {
       position:fixed; top:88px; right:14px; z-index:12; width:min(328px, calc(100vw - 28px)); max-height:calc(100dvh - 112px); overflow:auto; padding:12px;
       color:#1c3448; background:rgba(255,255,255,.62); border:1px solid rgba(255,255,255,.7);
       border-radius:8px; box-shadow:0 18px 40px rgba(20,52,79,.18); backdrop-filter:blur(18px);
-      font:12px/1.35 system-ui,sans-serif; opacity:0; transform:translateY(-4px); pointer-events:none;
+      font:12px/1.35 var(--font-sans); opacity:0; transform:translateY(-4px); pointer-events:none;
       transition:opacity 160ms ease, transform 160ms ease;
       overscroll-behavior:contain; -webkit-overflow-scrolling:touch; touch-action:auto;
     }
@@ -1020,7 +915,7 @@ function orbHtml() {
     .gesture-lab button {
       min-height:32px;
       border:1px solid rgba(255,255,255,.72); border-radius:999px; padding:7px 9px; cursor:pointer;
-      color:#20394e; background:rgba(255,255,255,.54); font:700 12px/1 system-ui,sans-serif;
+      color:#20394e; background:rgba(255,255,255,.54); font:600 12px/1 var(--font-sans);
     }
     .gesture-lab button:disabled { opacity:.42; cursor:default; }
     .gesture-lab-current { margin:8px 0; padding:8px; border-radius:8px; background:rgba(255,255,255,.34); }
@@ -1036,7 +931,7 @@ function orbHtml() {
       position:fixed; left:50%; bottom:24px; z-index:11; transform:translateX(-50%) translateY(10px);
       color:#20394e; background:rgba(255,255,255,.56); border:1px solid rgba(255,255,255,.7);
       border-radius:999px; box-shadow:0 14px 30px rgba(20,52,79,.14); backdrop-filter:blur(16px);
-      padding:7px 12px; font:600 12px/1 system-ui,sans-serif; opacity:0; pointer-events:none;
+      padding:7px 12px; font:500 12px/1 var(--font-sans); opacity:0; pointer-events:none;
       transition:opacity 180ms ease, transform 180ms ease;
     }
     .gesture-feedback.is-visible { opacity:.92; transform:translateX(-50%) translateY(0); }
@@ -1044,27 +939,27 @@ function orbHtml() {
       position:fixed; left:50%; bottom:58px; z-index:11; min-width:190px; max-width:min(360px, calc(100vw - 32px));
       transform:translateX(-50%); color:#20394e; background:rgba(255,255,255,.46);
       border:1px solid rgba(255,255,255,.64); border-radius:999px; box-shadow:0 12px 28px rgba(20,52,79,.12);
-      backdrop-filter:blur(16px); padding:7px 12px; font:700 11px/1.15 system-ui,sans-serif;
-      text-align:center; opacity:.72; pointer-events:none;
+      backdrop-filter:blur(16px); padding:7px 12px; font:600 11px/1.15 var(--font-sans);
+      text-align:center; opacity:0; pointer-events:none; transition:opacity 160ms ease;
     }
     .gesture-live-status.is-hot { background:rgba(255,236,174,.62); opacity:.95; }
     .vortex-toggle {
       position:fixed; top:52px; left:14px; z-index:10; width:28px; height:28px;
       border:1px solid rgba(255,255,255,.68); border-radius:999px; cursor:pointer;
-      color:#264257; font:800 14px/1 system-ui,sans-serif; background:rgba(255,255,255,.52);
+      color:#264257; font:600 14px/1 var(--font-sans); background:rgba(255,255,255,.52);
       box-shadow:0 8px 22px rgba(20,52,79,.16); backdrop-filter:blur(12px);
     }
     .vortex-panel {
       position:fixed; top:88px; left:14px; z-index:12; width:min(252px, calc(100vw - 28px)); max-height:calc(100dvh - 112px); overflow:auto; padding:12px;
       color:#1c3448; background:rgba(255,255,255,.58); border:1px solid rgba(255,255,255,.7);
       border-radius:8px; box-shadow:0 18px 40px rgba(20,52,79,.18); backdrop-filter:blur(18px);
-      font:12px/1.25 system-ui,sans-serif; opacity:0; transform:translateY(-4px); pointer-events:none;
+      font:12px/1.25 var(--font-sans); opacity:0; transform:translateY(-4px); pointer-events:none;
       transition:opacity 160ms ease, transform 160ms ease;
       overscroll-behavior:contain; -webkit-overflow-scrolling:touch; touch-action:auto;
     }
     .vortex-panel.is-open { opacity:1; transform:none; pointer-events:auto; }
     .vortex-panel b { display:block; margin-bottom:8px; font-size:12px; }
-    .vortex-section { margin:10px 0 5px; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; opacity:.62; }
+    .vortex-section { margin:10px 0 5px; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; opacity:.62; }
     .vortex-control { display:grid; grid-template-columns:72px minmax(0,1fr) 34px; gap:8px; align-items:center; margin:7px 0; }
     .vortex-control span { font-variant-numeric:tabular-nums; text-align:right; opacity:.78; }
     .vortex-control input { width:100%; accent-color:#ff7a00; }
@@ -1072,14 +967,14 @@ function orbHtml() {
     .mode-row button {
       min-height:32px;
       border:1px solid rgba(255,255,255,.72); border-radius:999px; padding:6px 8px; cursor:pointer;
-      color:#20394e; background:rgba(255,255,255,.38); font:700 12px/1 system-ui,sans-serif;
+      color:#20394e; background:rgba(255,255,255,.38); font:600 12px/1 var(--font-sans);
     }
     .mode-row button.is-active { background:rgba(255,138,30,.78); color:#fff7df; box-shadow:0 7px 18px rgba(166,74,0,.18); }
     .mode-row.frame-mode { grid-template-columns:1fr 1fr; margin-top:9px; }
     .vortex-randomize {
       width:100%; margin-top:7px; border:1px solid rgba(255,255,255,.72); border-radius:999px;
       padding:7px 10px; cursor:pointer; color:#20394e; background:rgba(255,255,255,.54);
-      font:700 12px/1 system-ui,sans-serif; box-shadow:0 8px 20px rgba(20,52,79,.12);
+      font:600 12px/1 var(--font-sans); box-shadow:0 8px 20px rgba(20,52,79,.12);
     }
     #presenceVideo { position:fixed; width:1px; height:1px; left:-12px; top:-12px; opacity:0; pointer-events:none; }
     @media (max-width: 700px) {
@@ -1207,7 +1102,7 @@ function orbHtml() {
       <div class="gesture-results" id="gestureResults"></div>
     </div>
   </div>
-  <div class="gesture-live-status" id="gestureLiveStatus" aria-hidden="true">Camera waiting</div>
+  <div class="gesture-live-status" id="gestureLiveStatus" aria-hidden="true"></div>
   <div class="gesture-feedback" id="gestureFeedback" aria-hidden="true">Gesture caught</div>
   <canvas id="memoryCanvas" aria-hidden="true"></canvas>
   <video id="presenceVideo" playsinline muted aria-hidden="true"></video>
@@ -1856,7 +1751,7 @@ function orbHtml() {
         if (ctx.state === "running" && !audioUnlocked) {
           audioUnlocked = true;
           document.body.classList.add("audio-armed");
-          playChime(".context", 4, "modify");
+          playChime("root", 4, "modify");
         }
       } catch {}
     }
@@ -2008,7 +1903,7 @@ function orbHtml() {
     }
     function samplePresence() {
       if (!presence.ready || !presence.video || presence.video.readyState < 2) {
-        updateGestureLiveStatus(presence.failed ? "Camera unavailable" : "Camera waiting", 0);
+        if (presence.failed) updateGestureLiveStatus("Camera unavailable", 0);
         if (presence.started) requestAnimationFrame(samplePresence);
         return;
       }
@@ -3445,7 +3340,7 @@ function orbHtml() {
       makeStreak(1.42 + Math.sin(i * 1.7) * 0.18, -1.44 + i * 0.17, 0.46 + (i % 6) * 0.18, 0xffec32, 0.12);
     }
 
-    function addMemoryTrace(repo = ".context", strength = 1, kind = "modify") {
+    function addMemoryTrace(repo = "root", strength = 1, kind = "modify") {
       if (kind === "wake") return;
       const hash = hashText(repo);
       const color = new THREE.Color(kind === "delete" ? 0x17223d : repoColor(repo));
@@ -3497,8 +3392,8 @@ function orbHtml() {
       const amount = Math.max(1, strength || 1);
       return 0.00045 + Math.min(0.0055, Math.log1p(amount) * 0.00115);
     }
-    function projectShape(repo = ".context") {
-      const hash = hashText(repo || ".context");
+    function projectShape(repo = "root") {
+      const hash = hashText(repo || "root");
       return 1 + ((hash >>> 4) % 1000) / 999;
     }
     function currentShapeValue() {
@@ -3539,9 +3434,9 @@ function orbHtml() {
       coreUniforms.projectGlow.value = Math.min(0.82, coreUniforms.projectGlow.value + 0.18);
       playHandGestureTone(1.4);
     }
-    function machinePulse(strength, repo = ".context", kind = "modify") {
+    function machinePulse(strength, repo = "root", kind = "modify") {
       const amount = Math.max(1, strength || 1);
-      const hash = hashText(repo || ".context");
+      const hash = hashText(repo || "root");
       const direction = randomUnitVector();
       const power = spinPower(amount);
       morphToShape(projectShape(repo), 100, 260 + Math.min(520, amount * 55));
@@ -3599,7 +3494,7 @@ function orbHtml() {
     }
     const pendingProjectPulses = new Map();
     let projectPulseTimer = null;
-    function queueProjectPulse(strength, repo = ".context", kind = "modify") {
+    function queueProjectPulse(strength, repo = "root", kind = "modify") {
       const now = performance.now();
       const key = repo + ":" + kind;
       const previous = pendingProjectPulses.get(key);
@@ -3619,7 +3514,7 @@ function orbHtml() {
         });
       }, 520);
     }
-    function scheduleMachinePulse(strength, repo = ".context", kind = "modify") {
+    function scheduleMachinePulse(strength, repo = "root", kind = "modify") {
       const amount = Math.max(1, strength || 1);
       const delay = 80 + Math.random() * 420 + Math.min(650, amount * 32 * Math.random());
       setTimeout(() => machinePulse(amount, repo, kind), delay);
@@ -3637,7 +3532,7 @@ function orbHtml() {
       }
       if (mtime > previous) {
         const changed = data.files.filter((file) => Date.parse(file.mtimeIso || "") > previous).slice(0, 8);
-        const repo = ((changed[0] && changed[0].path) || latest.path || ".context").split("/")[0];
+        const repo = ((changed[0] && changed[0].path) || latest.path || "root").split("/")[0];
         queueProjectPulse(Math.max(1, changed.length), repo, "modify");
       }
     }
@@ -3656,9 +3551,9 @@ function orbHtml() {
           if (data.events && data.events.length) {
             const byRepo = new Map();
             for (const item of data.events.slice(0, 12)) {
-              const key = (item.repo || ".context") + ":" + (item.kind || "modify");
+              const key = (item.repo || "root") + ":" + (item.kind || "modify");
               byRepo.set(key, {
-                repo: item.repo || ".context",
+                repo: item.repo || "root",
                 kind: item.kind || "modify",
                 count: (byRepo.get(key)?.count || 0) + (item.count || 1),
               });
@@ -4153,7 +4048,7 @@ function readVendor(pathname: string) {
   return null;
 }
 
-for (const p of [join(ROOT, ".context/runs"), join(DIR, "src"), join(DIR, "server.ts"), join(DIR, "build-dashboard.ts")]) {
+for (const p of [config.contextDir && join(config.contextDir, "runs"), join(DIR, "src"), join(DIR, "server.ts"), join(DIR, "build-dashboard.ts")].filter((path): path is string => Boolean(path))) {
   try { watch(p, { recursive: true }, schedule); } catch {}
 }
 indexRecentFiles();
@@ -4187,7 +4082,6 @@ Bun.serve({
     if (url.pathname === "/dashboard" || url.pathname === "/dashboard.html" || url.pathname === "/index.html") return Response.redirect(`http://${HOST}:${PORT}/`, 302);
     if (url.pathname === "/orb") return new Response(orbHtml(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
     if (url.pathname === "/api/recent-files") return new Response(recentFilesJsonString(), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
-    if (url.pathname === "/api/conversations") return new Response(conversationsJsonString(), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
     if (url.pathname === "/api/recent-files/events") {
       let activityController: ReadableStreamDefaultController | null = null;
       const stream = new ReadableStream({

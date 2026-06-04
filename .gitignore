@@ -1,5 +1,6 @@
 node_modules/
 dist/
+glance.config.json
 dashboard.json
 dashboard.html
 public/
