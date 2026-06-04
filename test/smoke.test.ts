@@ -32,6 +32,8 @@ test("exposes only Watch and Orb over a configured local root", async () => {
 
     const manifest = await (await request("/manifest.webmanifest")).json() as any;
     expect(manifest.name).toBe("Glance");
+    expect(manifest.display_override).toEqual(["window-controls-overlay", "standalone"]);
+    expect(manifest.launch_handler.client_mode).toBe("focus-existing");
     expect(manifest.shortcuts.map((entry: any) => entry.name)).toEqual(["Watch", "Orb"]);
     for (const route of ["/agents", "/harnesses", "/api/token", "/api/system/lock", "/api/conversations"]) {
       expect((await request(route)).status).toBe(404);

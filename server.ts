@@ -69,8 +69,11 @@ function pwaScript() {
       try { localStorage.setItem(GLANCE_PREF_KEY, JSON.stringify({ ...glancePrefs(), ...patch })); } catch {}
     }
     function syncWindowControlsOverlay() {
-      const visible = Boolean(navigator.windowControlsOverlay && navigator.windowControlsOverlay.visible);
+      const overlay = navigator.windowControlsOverlay;
+      const visible = Boolean(overlay && overlay.visible);
       document.documentElement.classList.toggle("window-controls-overlay", visible);
+      document.documentElement.classList.toggle("installed-no-overlay", matchMedia("(display-mode: standalone)").matches && !visible);
+      window.dispatchEvent(new CustomEvent("glance-overlay-change", { detail: { visible } }));
     }
     if (navigator.windowControlsOverlay) {
       syncWindowControlsOverlay();
@@ -108,6 +111,7 @@ function pwaScript() {
       location.replace(url.toString());
     }
     window.machineHardRefresh = machineHardRefresh;
+    window.glanceRefreshApp = machineHardRefresh;
     if ("serviceWorker" in navigator) {
       addEventListener("load", async () => {
         try {
@@ -407,6 +411,8 @@ function watchHtml() {
     html.window-controls-overlay .titlebar { height:env(titlebar-area-height, 42px); padding-left:max(12px, env(titlebar-area-x, 12px)); padding-right:max(92px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 100px)))); }
     main { width:min(100%, 1440px); margin:0 auto; padding:14px; }
     html.window-controls-overlay main > .page-nav { display:none; }
+    html.installed-no-overlay .titlebar { height:44px; padding:5px 54px 5px 14px; background:rgba(244,246,248,.94); border-bottom:1px solid var(--line); }
+    html.installed-no-overlay main > .page-nav { display:none; }
     .meta { display:grid; grid-template-columns: 34px 34px minmax(140px,180px) minmax(0,1fr); gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; align-items:center; min-width:0; }
     .meta > * { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .tool-button { width:26px; height:26px; border:1px solid var(--line); border-radius:999px; cursor:pointer; box-shadow:0 1px 2px rgba(31,41,51,.12); }
@@ -877,6 +883,8 @@ function orbHtml() {
     .titlebar .page-nav, .titlebar button, .titlebar a { -webkit-app-region:no-drag; app-region:no-drag; }
     html.window-controls-overlay .titlebar { height:env(titlebar-area-height, 42px); padding-left:max(12px, env(titlebar-area-x, 12px)); padding-right:max(92px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 100px)))); }
     html.window-controls-overlay body > .page-nav { display:none; }
+    html.installed-no-overlay .titlebar { height:48px; padding:5px 54px 5px 14px; }
+    html.installed-no-overlay body > .page-nav { display:none; }
     body.buddy-mode { background:transparent; }
     body.buddy-mode::before {
       content:""; position:fixed; inset:8px; z-index:0; pointer-events:none;
