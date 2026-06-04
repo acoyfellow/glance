@@ -406,13 +406,12 @@ function watchHtml() {
     :root { color-scheme: light; --font-sans:"Avenir Next", Avenir, "Helvetica Neue", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --font-mono:"SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; --bg:#f4f6f8; --paper:#fff; --line:#d7dee5; --text:#1f2933; --muted:#667085; --hot:#155eef; --glow:#d7f7ea; }
     * { box-sizing:border-box; }
     body { margin:0; overflow-x:hidden; background:var(--bg); color:var(--text); font:13px/1.35 var(--font-sans); }
-    .titlebar { display:flex; align-items:center; height:0; padding:0; overflow:hidden; -webkit-app-region:drag; app-region:drag; }
-    .titlebar .page-nav, .titlebar button, .titlebar a { -webkit-app-region:no-drag; app-region:no-drag; }
-    html.window-controls-overlay .titlebar { height:env(titlebar-area-height, 42px); padding-left:max(12px, env(titlebar-area-x, 12px)); padding-right:max(92px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 100px)))); }
+    .appbar { display:flex; align-items:center; margin-bottom:10px; -webkit-app-region:drag; app-region:drag; }
+    .appbar .page-nav, .appbar button, .appbar a { -webkit-app-region:no-drag; app-region:no-drag; }
     main { width:min(100%, 1440px); margin:0 auto; padding:14px; }
-    html.window-controls-overlay main > .page-nav { display:none; }
-    html.installed-no-overlay .titlebar { height:44px; padding:5px 54px 5px 14px; background:rgba(244,246,248,.94); border-bottom:1px solid var(--line); }
-    html.installed-no-overlay main > .page-nav { display:none; }
+    html.window-controls-overlay .appbar { height:env(titlebar-area-height, 42px); margin:0; padding-left:max(12px, env(titlebar-area-x, 12px)); padding-right:max(92px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 100px)))); }
+    html.window-controls-overlay main { padding-top:0; }
+    html.window-controls-overlay .appbar .page-nav { margin-bottom:0; min-height:34px; }
     .meta { display:grid; grid-template-columns: 34px 34px minmax(140px,180px) minmax(0,1fr); gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; align-items:center; min-width:0; }
     .meta > * { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .tool-button { width:26px; height:26px; border:1px solid var(--line); border-radius:999px; cursor:pointer; box-shadow:0 1px 2px rgba(31,41,51,.12); }
@@ -532,13 +531,9 @@ function watchHtml() {
   </style>
 </head>
 <body>
-  <header class="titlebar"><nav class="page-nav" aria-label="Glance pages"><a href="/" aria-current="page">Watch</a><a href="/orb">Orb</a></nav></header>
   <button class="tool-button fullscreen-toggle" id="fullscreenToggle" type="button" aria-label="Toggle fullscreen"></button>
   <main>
-    <nav class="page-nav" aria-label="Glance pages">
-      <a href="/" aria-current="page">Watch</a>
-      <a href="/orb">Orb</a>
-    </nav>
+    <header class="appbar"><nav class="page-nav" aria-label="Glance pages"><a href="/" aria-current="page">Watch</a><a href="/orb">Orb</a></nav></header>
     <div class="meta"><button class="tool-button project-toggle" id="projectToggle" type="button" aria-label="Toggle project recency"></button><div id="count">loading</div><div>${ROOT}</div></div>
     <section class="machine-strip" aria-live="polite">
       <div class="machine-card observer"><i class="observer-indicator" aria-hidden="true"></i><span>Observer</span><b id="machineState" class="state-running">loading</b></div>
@@ -879,12 +874,10 @@ function orbHtml() {
     :root { --font-sans:"Avenir Next", Avenir, "Helvetica Neue", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --font-mono:"SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; }
     * { box-sizing:border-box; }
     html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#63b7dc; font-family:var(--font-sans); }
-    .titlebar { position:fixed; top:0; left:0; right:0; z-index:20; display:flex; align-items:center; height:0; overflow:hidden; -webkit-app-region:drag; app-region:drag; }
-    .titlebar .page-nav, .titlebar button, .titlebar a { -webkit-app-region:no-drag; app-region:no-drag; }
-    html.window-controls-overlay .titlebar { height:env(titlebar-area-height, 42px); padding-left:max(12px, env(titlebar-area-x, 12px)); padding-right:max(92px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 100px)))); }
-    html.window-controls-overlay body > .page-nav { display:none; }
-    html.installed-no-overlay .titlebar { height:48px; padding:5px 54px 5px 14px; }
-    html.installed-no-overlay body > .page-nav { display:none; }
+    .appbar { position:fixed; top:14px; left:14px; right:54px; z-index:20; display:flex; align-items:center; -webkit-app-region:drag; app-region:drag; }
+    .appbar .page-nav, .appbar button, .appbar a { -webkit-app-region:no-drag; app-region:no-drag; }
+    html.window-controls-overlay .appbar { top:0; left:0; right:0; height:env(titlebar-area-height, 42px); padding-left:max(12px, env(titlebar-area-x, 12px)); padding-right:max(92px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 100px)))); }
+    html.window-controls-overlay .appbar .page-nav { position:static; margin:0; height:34px; }
     body.buddy-mode { background:transparent; }
     body.buddy-mode::before {
       content:""; position:fixed; inset:8px; z-index:0; pointer-events:none;
@@ -1076,11 +1069,7 @@ function orbHtml() {
   </style>
 </head>
 <body>
-  <header class="titlebar"><nav class="page-nav" aria-label="Glance pages"><a href="/">Watch</a><a href="/orb" aria-current="page">Orb</a></nav></header>
-  <nav class="page-nav" aria-label="Glance pages">
-    <a href="/">Watch</a>
-    <a href="/orb" aria-current="page">Orb</a>
-  </nav>
+  <header class="appbar"><nav class="page-nav" aria-label="Glance pages"><a href="/">Watch</a><a href="/orb" aria-current="page">Orb</a></nav></header>
   <button class="fullscreen-toggle" id="fullscreenToggle" type="button" aria-label="Toggle fullscreen"></button>
   <button class="ambient-toggle" id="ambientToggle" type="button" aria-label="Toggle ambient mode">◦</button>
   <button class="vortex-toggle" id="vortexToggle" type="button" aria-label="Show vortex controls">~</button>
