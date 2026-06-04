@@ -1,8 +1,12 @@
 # Glance
 
-**A local visual glance at what your projects are doing.**
+**An ambient working environment for seeing and hearing your projects move.**
 
-Glance is a local-first, read-only PWA with two views:
+Glance is an early experiment in organization, self-management, and future ways of interacting with computers through quieter, more expressive interfaces. Instead of asking you to stare at terminals and dashboards, it turns local activity into an environment you can glance at — or hear in the background while agents work.
+
+This is an early version: local-first, read-only, and intentionally exploratory.
+
+Glance currently has two views:
 
 - **Watch** — recent file and repository activity.
 - **Orb** — an ambient visual view of the same live signals.
@@ -21,7 +25,7 @@ local project activity + optional event files
 
 ## What it does
 
-Glance is an ambient working environment: point it at your local projects, then see and hear activity as work happens without giving the app command execution or control privileges.
+Point Glance at your local projects, then see and hear activity as work happens without giving the app command execution or control privileges. It is a small exploration of what a personal computing surface could feel like when your attention, projects, and agents all need to coexist.
 
 ## Features
 
