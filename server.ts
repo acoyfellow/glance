@@ -19,6 +19,20 @@ let lastBroadcast = "";
 let lastBroadcastAt = 0;
 const allowedHosts = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
 const allowedOrigins = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
+const MY_AX_ORIGIN = process.env.MY_AX_ORIGIN || "https://my.ax.cloudflare.dev";
+function myAxToken() {
+  const result = spawnSync("cloudflared", ["access", "token", "-app", MY_AX_ORIGIN], { encoding: "utf8" });
+  if (result.status !== 0 || !result.stdout.trim()) throw new Error("Cloudflare Access token unavailable");
+  return result.stdout.trim();
+}
+async function myAxCall(method: "attention_list" | "attention_acknowledge", args: Record<string, unknown> = {}) {
+  const response = await fetch(`${MY_AX_ORIGIN}/api/mcp`, { method: "POST", headers: { "content-type": "application/json", "cf-access-token": myAxToken() }, body: JSON.stringify({ jsonrpc: "2.0", id: crypto.randomUUID(), method: "tools/call", params: { name: "my_ax_call", arguments: { method, arguments: args } } }) });
+  if (!response.ok) throw new Error(`My AX returned ${response.status}`);
+  const rpc = await response.json() as any;
+  const text = rpc?.result?.content?.[0]?.text;
+  if (!text) throw new Error(rpc?.error?.message || "Invalid My AX response");
+  return JSON.parse(text);
+}
 
 function allowed(req: Request) {
   const host = req.headers.get("host") ?? "";
@@ -28,7 +42,7 @@ function allowed(req: Request) {
   return true;
 }
 function rebuild() {
-  spawnSync("bun", ["run", builder], { cwd: ROOT, env: process.env, encoding: "utf8" });
+  spawnSync("bun", ["run", builder], { cwd: DIR, env: process.env, encoding: "utf8" });
   try { lastState = readFileSync(join(DIR, "dashboard.json"), "utf8"); } catch { lastState = JSON.stringify({ error: "missing dashboard.json" }); }
   const now = Date.now();
   if (lastState === lastBroadcast && now - lastBroadcastAt < 1000) return;
@@ -123,6 +137,9 @@ function pwaScript() {
       });
     }
   </script>`;
+}
+function myAxHtml() {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My AX · Glance</title>${pwaHead("My AX · Glance")}<style>body{margin:0;background:#f4f6f8;color:#18202a;font:14px system-ui;padding:24px}main{max-width:680px;margin:auto}header{display:flex;justify-content:space-between;align-items:center}button,a{color:#075985}li{background:white;border:1px solid #dbe2e8;border-radius:14px;padding:14px;margin:10px 0;list-style:none}ul{padding:0}.actions{display:flex;gap:12px;margin-top:8px}.muted{color:#64748b}</style></head><body><main><header><div><h1>My AX</h1><p class="muted">Ambient attention · bounded reactions</p></div><a href="/">Glance</a></header><ul id="items"><li>Loading…</li></ul></main><script>async function load(){const r=await fetch('/api/my-ax/attention');const b=await r.json();const items=b.items||[];document.querySelector('#items').innerHTML=items.length?items.map(i=>'<li data-id="'+i.id+'"><strong>'+esc(i.title)+'</strong><p>'+esc(i.body)+'</p><div class="actions"><a target="_blank" rel="noreferrer" href="${MY_AX_ORIGIN}'+i.href+'">Open</a><button onclick="ack(\\''+i.id+'\\')">Acknowledge</button></div></li>').join(''):'<li>Nothing needs you.</li>'}function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}async function ack(id){const r=await fetch('/api/my-ax/attention/'+id+'/ack',{method:'POST'});if(!r.ok){alert(await r.text());return}document.querySelector('[data-id="'+id+'"]').remove()}load();setInterval(load,30000)</script></body></html>`;
 }
 function appVersionJson() {
   let serverMtime = 0;
@@ -221,13 +238,19 @@ const recentFileIgnorePathParts = [
   "rspack/ssl/local-certs/",
 ];
 type ActivityFile = { path: string; mtime: number; mtimeIso: string; size: number };
-type ActivitySignal = "source" | "generated" | "log" | "config" | "secret" | "git" | "context" | "asset";
-type ActivityEvent = { kind: "create" | "modify" | "delete" | "burst"; signal: ActivitySignal; path: string; repo: string; size: number; previousSize?: number; mtimeIso: string; count?: number };
+type AgentState = "working" | "waiting" | "blocked" | "uncertain" | "risky" | "done";
+type AgentPresence = { version: "glance.agent.v1"; ts: string; agent: string; repo: string; state: AgentState; note?: string; ttlMs?: number };
+type ActivitySignal = "source" | "generated" | "log" | "config" | "secret" | "git" | "context" | "asset" | "agent";
+type ActivityKind = "create" | "modify" | "delete" | "burst" | AgentState;
+type ActivityEvent = { kind: ActivityKind; signal: ActivitySignal; path: string; repo: string; size: number; previousSize?: number; mtimeIso: string; count?: number };
 type ProjectRoot = { repo: string; latest: number; latestIso: string };
 const activityByPath = new Map<string, ActivityFile>();
 const projectRoots = new Map<string, ProjectRoot>();
 const burstWindows = new Map<string, number[]>();
 const pendingActivityEvents = new Map<string, ActivityEvent>();
+const agentsById = new Map<string, AgentPresence>();
+const AGENTS_LOG = config.contextDir ? join(config.contextDir, "agents.jsonl") : null;
+let agentsLogContent = "";
 let activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root: ROOT, files: [] });
 let activityDirty = true;
 let activityBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -252,6 +275,7 @@ function shouldIgnoreRecentPath(relPath: string, name = relPath.split("/").at(-1
   const lower = relPath.toLowerCase();
   const lowerName = name.toLowerCase();
   if (recentFileIgnoreFiles.has(name) || recentFileIgnoreFiles.has(lowerName)) return true;
+  if (/\.timestamp-\d+-[a-f0-9]+\.mjs$/i.test(name)) return true;
   if (lowerName.endsWith(".pem") && lower.includes("/local-certs/")) return true;
   if (lowerName.endsWith(".map") && lower.includes("cache")) return true;
   if (lower.includes("cache/") || lower.includes("-cache-") || lower.includes("/cache/")) return true;
@@ -361,8 +385,39 @@ function projectsFromActivity(files: ActivityFile[]) {
   }
   return [...projects.values()].sort((a, b) => b.latest - a.latest);
 }
+function currentAgents() {
+  const now = Date.now();
+  for (const [id, agent] of agentsById) if (agent.ttlMs && now - Date.parse(agent.ts) > agent.ttlMs) agentsById.delete(id);
+  return [...agentsById.values()].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+}
+function loadAgentPresence(notify = false) {
+  if (!AGENTS_LOG || !existsSync(AGENTS_LOG)) return;
+  let content = "";
+  try { content = readFileSync(AGENTS_LOG, "utf8"); } catch { return; }
+  if (content === agentsLogContent) return;
+  const previous = new Map(agentsById);
+  agentsById.clear();
+  const states = new Set<AgentState>(["working", "waiting", "blocked", "uncertain", "risky", "done"]);
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const raw = JSON.parse(line);
+      if (!raw.agent || !raw.repo || !states.has(raw.state)) continue;
+      const event: AgentPresence = { version: "glance.agent.v1", ts: raw.ts || new Date().toISOString(), agent: String(raw.agent), repo: String(raw.repo), state: raw.state, ...(raw.note ? { note: String(raw.note) } : {}), ...(raw.ttlMs ? { ttlMs: Number(raw.ttlMs) } : {}) };
+      agentsById.set(event.agent, event);
+    } catch {}
+  }
+  agentsLogContent = content;
+  if (notify) {
+    for (const agent of agentsById.values()) {
+      const old = previous.get(agent.agent);
+      if (!old || old.ts !== agent.ts || old.state !== agent.state) queueActivity({ kind: agent.state, signal: "agent", path: `agent/${agent.agent}`, repo: agent.repo, size: 0, mtimeIso: agent.ts });
+    }
+    broadcastActivity();
+  }
+}
 function activityPayload(events: ActivityEvent[] = []) {
-  return JSON.stringify({ ...JSON.parse(recentFilesJsonString()), events });
+  return JSON.stringify({ ...JSON.parse(recentFilesJsonString()), agents: currentAgents(), events });
 }
 function broadcastActivity(events: ActivityEvent[] = []) {
   const data = `event: activity\ndata: ${activityPayload(events)}\n\n`;
@@ -531,11 +586,12 @@ function watchHtml() {
 <body>
   <button class="tool-button fullscreen-toggle" id="fullscreenToggle" type="button" aria-label="Toggle fullscreen"></button>
   <main>
-    <header class="appbar"><nav class="page-nav" aria-label="Glance pages"><a href="/" aria-current="page">Watch</a><a href="/orb">Orb</a></nav></header>
+    <header class="appbar"><nav class="page-nav" aria-label="Glance pages"><a href="/" aria-current="page">Watch</a><a href="/orb">Orb</a></nav><button id="soundToggle" type="button" aria-label="Toggle Glance sounds">Sound</button></header>
     <div class="meta"><button class="tool-button project-toggle" id="projectToggle" type="button" aria-label="Toggle project recency"></button><div id="count">loading</div><div>${ROOT}</div></div>
     <section class="machine-strip" aria-live="polite">
       <div class="machine-card observer"><i class="observer-indicator" aria-hidden="true"></i><span>Observer</span><b id="machineState" class="state-running">loading</b></div>
       <div class="machine-card activity"><span>Latest Signal</span><b id="machineActivity">loading</b></div>
+      <div class="machine-card agents"><span>Agents</span><b id="agentPresence">none</b></div>
       <div class="machine-card radar"><span>Git Radar</span><b id="gitRadar">—</b></div>
       <div class="machine-card focus"><span>Focus</span><b id="gitFocus">—</b></div>
       <div class="machine-updated" id="updated">Updated —</div>
@@ -549,7 +605,13 @@ function watchHtml() {
     const fmt = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
     const seen = new Map();
     const deletedRows = new Map();
-    let projectView = false;
+    let projectView = true;
+    document.body.classList.add("project-view");
+    let soundEnabled = localStorage.getItem("glance:sound") !== "off";
+    const soundToggle = document.getElementById("soundToggle");
+    const syncSoundToggle = () => { soundToggle.setAttribute("aria-pressed", soundEnabled ? "true" : "false"); soundToggle.textContent = soundEnabled ? "Sound on" : "Sound off"; };
+    soundToggle.addEventListener("click", async () => { soundEnabled = !soundEnabled; localStorage.setItem("glance:sound", soundEnabled ? "on" : "off"); syncSoundToggle(); if (soundEnabled) await wakeAudio(); });
+    syncSoundToggle();
     let lastData;
     let firstRender = true;
     let audio;
@@ -704,7 +766,7 @@ function watchHtml() {
       extra.stop(at + duration * 0.78);
     }
     function chime(repo, strength, kind = "modify", signal = "source") {
-      if (firstRender || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      if (!soundEnabled || firstRender || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
       const now = Date.now();
       if (now - lastChime < 420) return;
       lastChime = now;
@@ -800,6 +862,10 @@ function watchHtml() {
     }
     async function render(data, preserveEffects = false) {
       lastData = data;
+      const agents = Array.isArray(data.agents) ? data.agents : [];
+      const presence = document.getElementById("agentPresence");
+      presence.textContent = agents.length ? agents.map((agent) => agent.agent + " · " + agent.state).join(" / ") : "none";
+      presence.title = agents.map((agent) => agent.repo + ": " + (agent.note || agent.state)).join("\\n");
       const changed = new Set();
       const changedRepos = new Map();
       const eventList = Array.isArray(data.events) ? data.events : [];
@@ -1053,7 +1119,7 @@ function orbHtml() {
   </style>
 </head>
 <body>
-  <header class="appbar"><nav class="page-nav" aria-label="Glance pages"><a href="/">Watch</a><a href="/orb" aria-current="page">Orb</a></nav></header>
+  <header class="appbar"><nav class="page-nav" aria-label="Glance pages"><a href="/">Watch</a><a href="/orb" aria-current="page">Orb</a></nav><button id="soundToggle" type="button" aria-label="Toggle Glance sounds">Sound</button></header>
   <button class="fullscreen-toggle" id="fullscreenToggle" type="button" aria-label="Toggle fullscreen"></button>
   <button class="ambient-toggle" id="ambientToggle" type="button" aria-label="Toggle ambient mode">◦</button>
   <button class="vortex-toggle" id="vortexToggle" type="button" aria-label="Show vortex controls">~</button>
@@ -1375,6 +1441,11 @@ function orbHtml() {
     const shapeState = { from: 0, to: 0, mix: 1, started: 0, duration: 920, returnAt: 0, returning: false };
     let audio;
     let audioUnlocked = false;
+    let soundEnabled = localStorage.getItem("glance:sound") !== "off";
+    const soundToggle = document.getElementById("soundToggle");
+    const syncSoundToggle = () => { soundToggle.setAttribute("aria-pressed", soundEnabled ? "true" : "false"); soundToggle.textContent = soundEnabled ? "Sound on" : "Sound off"; };
+    soundToggle.addEventListener("click", async () => { soundEnabled = !soundEnabled; localStorage.setItem("glance:sound", soundEnabled ? "on" : "off"); syncSoundToggle(); if (soundEnabled) await wakeAudio(); });
+    syncSoundToggle();
     let micStream = null;
     let micSource = null;
     let micAnalyser = null;
@@ -2191,6 +2262,7 @@ function orbHtml() {
       return micLevel;
     }
     function playTone(ctx, out, freq, time, wave, gain, attack, release) {
+      if (!soundEnabled) return;
       const osc = ctx.createOscillator();
       const amp = ctx.createGain();
       osc.type = wave;
@@ -4094,8 +4166,9 @@ function readVendor(pathname: string) {
   return null;
 }
 
-for (const p of [config.contextDir && join(config.contextDir, "runs"), join(DIR, "src"), join(DIR, "server.ts"), join(DIR, "build-dashboard.ts")].filter((path): path is string => Boolean(path))) {
-  try { watch(p, { recursive: true }, schedule); } catch {}
+loadAgentPresence();
+for (const p of [config.contextDir, config.contextDir && join(config.contextDir, "runs"), join(DIR, "src"), join(DIR, "server.ts"), join(DIR, "build-dashboard.ts")].filter((path): path is string => Boolean(path))) {
+  try { watch(p, { recursive: true }, () => { schedule(); loadAgentPresence(true); }); } catch {}
 }
 indexRecentFiles();
 try {
@@ -4124,10 +4197,21 @@ Bun.serve({
     if (url.pathname === "/sw.js") return new Response(serviceWorkerJs(), { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store", "service-worker-allowed": "/" } });
     if (url.pathname === "/icon.svg") return new Response(iconSvg(), { headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=86400" } });
     if (url.pathname === "/api/app-version") return new Response(appVersionJson(), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    if (url.pathname === "/my-ax") return new Response(myAxHtml(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    if (url.pathname === "/api/my-ax/attention" && req.method === "GET") {
+      try { return Response.json(await myAxCall("attention_list", { limit: 20 }), { headers: { "cache-control": "no-store" } }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 502 }); }
+    }
+    const ack = url.pathname.match(/^\/api\/my-ax\/attention\/([0-9a-f-]{36})\/ack$/i);
+    if (ack && req.method === "POST") {
+      try { return Response.json(await myAxCall("attention_acknowledge", { id: ack[1] })); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 502 }); }
+    }
     if (url.pathname === "/" || url.pathname === "/watch") return new Response(watchHtml(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
     if (url.pathname === "/dashboard" || url.pathname === "/dashboard.html" || url.pathname === "/index.html") return Response.redirect(`http://${HOST}:${PORT}/`, 302);
     if (url.pathname === "/orb") return new Response(orbHtml(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
-    if (url.pathname === "/api/recent-files") return new Response(recentFilesJsonString(), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    if (url.pathname === "/api/recent-files") return new Response(activityPayload(), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    if (url.pathname === "/api/agents") return new Response(JSON.stringify({ version: "glance.agent.v1", agents: currentAgents() }, null, 2), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
     if (url.pathname === "/api/recent-files/events") {
       let activityController: ReadableStreamDefaultController | null = null;
       const stream = new ReadableStream({

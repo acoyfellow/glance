@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "server": "bun run server.ts",
+    "server": "bun --watch run server.ts",
     "observe": "bun run src/git-observer.ts",
+    "demo:agents": "bun run demo/agent-presence.ts",
     "test": "bun test"
   },
   "dependencies": {
