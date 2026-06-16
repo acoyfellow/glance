@@ -252,6 +252,7 @@ const agentsById = new Map<string, AgentPresence>();
 const AGENTS_LOG = config.contextDir ? join(config.contextDir, "agents.jsonl") : null;
 let agentsLogContent = "";
 let activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root: ROOT, files: [] });
+let contributionCache: { at: number; days: { date: string; repos: Record<string, number>; total: number }[] } | null = null;
 let activityDirty = true;
 let activityBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
 function repoForPath(relPath: string) {
@@ -352,9 +353,54 @@ function recentFilesJsonString() {
   const allFiles = [...activityByPath.values()].sort((a, b) => b.mtime - a.mtime);
   const files = allFiles.slice(0, 240);
   const projects = projectsFromActivity(allFiles);
-  activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root: ROOT, files, projects }, null, 2);
+  const dailyActivity = contributionActivity(42);
+  activityCache = JSON.stringify({ generatedAt: new Date().toISOString(), root: ROOT, files, projects, dailyActivity }, null, 2);
   activityDirty = false;
   return activityCache;
+}
+function contributionActivity(days: number) {
+  if (contributionCache && Date.now() - contributionCache.at < 300000) return contributionCache.days;
+  const result = Array.from({ length: days }, (_, index) => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - (days - index - 1));
+    return { date: date.toISOString().slice(0, 10), repos: {} as Record<string, number>, total: 0 };
+  });
+  const byDate = new Map(result.map((day) => [day.date, day]));
+  let globalEmail = "";
+  try { globalEmail = spawnSync("git", ["config", "--global", "--get", "user.email"], { encoding: "utf8", timeout: 1000 }).stdout.trim(); } catch {}
+  let repoNames: string[] = [];
+  try {
+    const dashboard = JSON.parse(readFileSync(join(DIR, "dashboard.json"), "utf8"));
+    repoNames = (dashboard.gitObserver?.repos || []).map((repo: { path?: string }) => repo.path).filter(Boolean);
+  } catch {}
+  if (!repoNames.length) {
+    let entries: ReturnType<typeof readdirSync> = [];
+    try { entries = readdirSync(ROOT, { withFileTypes: true }); } catch {}
+    repoNames = entries.filter((entry) => entry.isDirectory() && existsSync(join(ROOT, entry.name, ".git"))).map((entry) => entry.name);
+  }
+  const seenCommits = new Set<string>();
+  for (const repoName of repoNames) {
+    const repo = join(ROOT, repoName);
+    if (!existsSync(join(repo, ".git"))) continue;
+    let email = globalEmail;
+    try { email = spawnSync("git", ["config", "--get", "user.email"], { cwd: repo, encoding: "utf8", timeout: 1000 }).stdout.trim() || email; } catch {}
+    if (!email) continue;
+    const since = result[0]?.date || "42 days ago";
+    const log = spawnSync("git", ["log", "--all", `--since=${since}`, `--author=${email}`, "--date=short", "--format=%H%x09%ad"], { cwd: repo, encoding: "utf8", timeout: 1800, maxBuffer: 1024 * 1024 });
+    if (log.status !== 0) continue;
+    for (const line of log.stdout.split(/\r?\n/).filter(Boolean)) {
+      const [hash, date] = line.split("\t");
+      if (!hash || !date || seenCommits.has(hash)) continue;
+      seenCommits.add(hash);
+      const day = byDate.get(date);
+      if (!day) continue;
+      day.repos[repoName] = (day.repos[repoName] || 0) + 1;
+      day.total++;
+    }
+  }
+  contributionCache = { at: Date.now(), days: result };
+  return result;
 }
 function projectsFromActivity(files: ActivityFile[]) {
   const projects = new Map<string, { repo: string; latest: number; latestIso: string; files: number; size: number; signals: Record<string, number>; paths: string[]; activity: number[] }>();
@@ -469,12 +515,20 @@ function watchHtml() {
     .meta { display:grid; grid-template-columns: 34px 34px minmax(140px,180px) minmax(0,1fr); gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; align-items:center; min-width:0; }
     .meta > * { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .tool-button { width:26px; height:26px; border:1px solid var(--line); border-radius:999px; cursor:pointer; box-shadow:0 1px 2px rgba(31,41,51,.12); }
-    .machine-strip { display:grid; grid-template-columns: 38px minmax(190px,1.5fr) minmax(120px,.65fr) minmax(120px,.75fr) max-content; gap:6px; margin-bottom:8px; align-items:center; min-height:42px; padding:5px; background:rgba(255,255,255,.76); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(31,41,51,.05); }
+    .machine-strip { display:grid; grid-template-columns:38px minmax(250px,1.2fr) minmax(360px,1.7fr) minmax(130px,.65fr) minmax(150px,.75fr) max-content; gap:6px; margin-bottom:8px; align-items:center; min-height:54px; padding:7px; background:rgba(255,255,255,.76); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(31,41,51,.05); }
     .machine-card { min-width:0; padding:0 8px; border-left:1px solid rgba(215,222,229,.72); }
     .machine-card:first-child { border-left:0; padding:0; display:flex; justify-content:center; }
     .machine-card span { display:block; color:var(--muted); font-size:9px; line-height:1; font-weight:500; letter-spacing:.08em; text-transform:uppercase; margin-bottom:3px; }
     .machine-card b { display:block; color:var(--text); font-size:12px; line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .machine-card.activity b { white-space:nowrap; display:block; }
+    .activity-history { min-width:190px; }
+    .activity-bars { display:flex; align-items:end; gap:2px; height:25px; padding-top:2px; }
+    .activity-day { flex:1 1 0; min-width:2px; height:100%; display:flex; flex-direction:column-reverse; justify-content:flex-start; border-radius:1px 1px 0 0; overflow:hidden; background:#edf1f4; }
+    .activity-day i { display:block; width:100%; min-height:0; }
+    .activity-day .source { background:#155eef; }
+    .activity-day .generated { background:#60a5fa; }
+    .activity-day .other { background:#f2d27c; }
+    .activity-day.today { box-shadow:0 0 0 1px rgba(21,94,239,.35); }
     .machine-card.observer span, .machine-card.observer b { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
     .observer-indicator { position:relative; display:block; width:18px; height:18px; border-radius:999px; background:#16a34a; box-shadow:0 0 0 4px rgba(22,163,74,.14); }
     .observer-indicator::before { content:""; position:absolute; inset:-5px; border:2px solid rgba(22,163,74,.24); border-top-color:#16a34a; border-radius:999px; animation:observer-spin 900ms linear infinite; }
@@ -484,6 +538,10 @@ function watchHtml() {
     .page-nav::-webkit-scrollbar { display:none; }
     .page-nav a { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; color:#667085; padding:0 14px; border-bottom:2px solid transparent; font:500 12px/1 var(--font-sans); text-decoration:none; white-space:nowrap; }
     .page-nav a[aria-current="page"] { color:#1f2933; border-bottom-color:#1f2933; }
+    #soundToggle { margin-left:auto; align-self:center; border:1px solid var(--line); border-radius:999px; background:#fff; color:var(--muted); padding:6px 10px; box-shadow:0 1px 2px rgba(31,41,51,.08); font:500 11px/1 var(--font-sans); cursor:pointer; white-space:nowrap; }
+    #soundToggle[aria-pressed="true"] { border-color:#a9c8b8; background:#edf8f2; color:#177245; box-shadow:0 0 0 3px rgba(22,163,74,.09); }
+    #soundToggle:hover { color:var(--text); border-color:#b8c2cc; }
+    #soundToggle:focus-visible { outline:2px solid var(--hot); outline-offset:2px; }
     .machine-question { display:none; margin:-2px 0 10px; background:#fff8e5; border:1px solid #edd28a; border-radius:8px; padding:10px; }
     .machine-question.is-open { display:block; }
     .machine-question b { display:block; margin-bottom:6px; color:#7a4d00; }
@@ -553,8 +611,8 @@ function watchHtml() {
     }
     @media (max-width: 980px) {
       main { width:100%; }
-      .machine-strip { grid-template-columns:38px minmax(160px,1fr) minmax(120px,.7fr) max-content; }
-      .machine-card.focus { display:none; }
+      .machine-strip { grid-template-columns:38px minmax(220px,1fr) minmax(300px,1.4fr) minmax(120px,.7fr); }
+      .machine-card.focus, .machine-updated { display:none; }
     }
     @media (max-width: 720px) {
       table, thead, tbody, tr, th, td { display:block; }
@@ -591,6 +649,7 @@ function watchHtml() {
     <section class="machine-strip" aria-live="polite">
       <div class="machine-card observer"><i class="observer-indicator" aria-hidden="true"></i><span>Observer</span><b id="machineState" class="state-running">loading</b></div>
       <div class="machine-card activity"><span>Latest Signal</span><b id="machineActivity">loading</b></div>
+      <div class="machine-card activity-history"><span>Your commits · 42 days</span><div class="activity-bars" id="activityHistory" aria-label="Daily activity over the last 42 days"></div></div>
       <div class="machine-card agents"><span>Agents</span><b id="agentPresence">none</b></div>
       <div class="machine-card radar"><span>Git Radar</span><b id="gitRadar">—</b></div>
       <div class="machine-card focus"><span>Focus</span><b id="gitFocus">—</b></div>
@@ -862,6 +921,16 @@ function watchHtml() {
     }
     async function render(data, preserveEffects = false) {
       lastData = data;
+      const days = Array.isArray(data.dailyActivity) ? data.dailyActivity : [];
+      const maxDay = Math.max(1, ...days.map((day) => day.total || 0));
+      document.getElementById("activityHistory").innerHTML = days.map((day, index) => {
+        const total = day.total || 0;
+        const height = Math.max(total ? 12 : 2, Math.round(total / maxDay * 100));
+        const repos = Object.entries(day.repos || {}).sort((a, b) => b[1] - a[1]);
+        const title = day.date + ": " + total + (total === 1 ? " commit" : " commits") + (repos.length ? " · " + repos.map(([repo, count]) => repo + " " + count).join(", ") : "");
+        const segments = repos.map(([repo, count]) => '<i style="height:' + Math.max(5, count / total * height) + '%;background:' + repoColor(repo).a + '"></i>').join("");
+        return '<div class="activity-day ' + (index === days.length - 1 ? 'today' : '') + '" title="' + title + '">' + segments + '</div>';
+      }).join("");
       const agents = Array.isArray(data.agents) ? data.agents : [];
       const presence = document.getElementById("agentPresence");
       presence.textContent = agents.length ? agents.map((agent) => agent.agent + " · " + agent.state).join(" / ") : "none";
@@ -941,6 +1010,10 @@ function orbHtml() {
     .appbar { position:fixed; top:0; left:0; right:0; z-index:20; display:flex; align-items:center; height:46px; padding:0 54px 0 14px; background:#fff; border-bottom:1px solid rgba(215,222,229,.92); -webkit-app-region:drag; app-region:drag; }
     .appbar .page-nav, .appbar button, .appbar a { -webkit-app-region:no-drag; app-region:no-drag; }
     html.window-controls-overlay .appbar { height:env(titlebar-area-height, 46px); padding-left:max(12px, env(titlebar-area-x, 12px)); padding-right:max(92px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 100px)))); }
+    #soundToggle { margin-left:auto; align-self:center; border:1px solid rgba(32,57,78,.18); border-radius:999px; background:rgba(255,255,255,.88); color:#667085; padding:6px 10px; box-shadow:0 1px 3px rgba(31,41,51,.08); font:500 11px/1 var(--font-sans); cursor:pointer; white-space:nowrap; }
+    #soundToggle[aria-pressed="true"] { border-color:rgba(22,163,74,.3); background:rgba(237,248,242,.94); color:#177245; box-shadow:0 0 0 3px rgba(22,163,74,.09); }
+    #soundToggle:hover { color:#1f2933; }
+    #soundToggle:focus-visible { outline:2px solid #155eef; outline-offset:2px; }
     body.buddy-mode { background:transparent; }
     body.buddy-mode::before {
       content:""; position:fixed; inset:8px; z-index:0; pointer-events:none;

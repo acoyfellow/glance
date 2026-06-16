@@ -136,6 +136,7 @@ Watch is the information-first surface. Use it to:
 - follow a live recent-file feed;
 - distinguish create, modify, delete, and other activity types;
 - see per-project colors and activity sparklines;
+- scan 42 days of your authored commits, stacked by repository and deduplicated by commit SHA across worktrees;
 - review repository count, attention, and current focus in the git radar;
 - switch between file and project views;
 - enter fullscreen;
