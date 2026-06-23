@@ -8,7 +8,7 @@ const config = loadConfig(import.meta.url);
 const ROOT = config.root;
 const DIR = dirname(new URL(import.meta.url).pathname);
 const DIST = join(DIR, "dist");
-const PORT = Number(process.env.MACHINE_DASHBOARD_PORT ?? 8787);
+const PORT = Number(process.env.GLANCE_PORT ?? process.env.MACHINE_DASHBOARD_PORT ?? 8788);
 const HOST = "127.0.0.1";
 const builder = join(DIR, "build-dashboard.ts");
 const clients = new Set<ServerWebSocket<unknown>>();
@@ -17,6 +17,7 @@ let lastState = "{}";
 let timer: Timer | null = null;
 let lastBroadcast = "";
 let lastBroadcastAt = 0;
+let rebuilding = false;
 const allowedHosts = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
 const allowedOrigins = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
 const MY_AX_ORIGIN = process.env.MY_AX_ORIGIN || "https://my.ax.cloudflare.dev";
@@ -42,13 +43,17 @@ function allowed(req: Request) {
   return true;
 }
 function rebuild() {
-  spawnSync("bun", ["run", builder], { cwd: DIR, env: process.env, encoding: "utf8" });
+  if (rebuilding) return;
+  rebuilding = true;
+  // Keep the HTTP surface responsive; dashboard generation can be expensive over a large root.
+  // The watch surface reads activity directly and does not need to block on a rebuild.
   try { lastState = readFileSync(join(DIR, "dashboard.json"), "utf8"); } catch { lastState = JSON.stringify({ error: "missing dashboard.json" }); }
   const now = Date.now();
   if (lastState === lastBroadcast && now - lastBroadcastAt < 1000) return;
   lastBroadcast = lastState;
   lastBroadcastAt = now;
   for (const ws of clients) if (ws.readyState === 1) ws.send(lastState);
+  rebuilding = false;
 }
 function schedule() { if (timer) clearTimeout(timer); timer = setTimeout(rebuild, 120); }
 function type(path: string) {
@@ -358,12 +363,16 @@ function recentFilesJsonString() {
   activityDirty = false;
   return activityCache;
 }
-function contributionActivity(days: number) {
-  if (contributionCache && Date.now() - contributionCache.at < 300000) return contributionCache.days;
-  const result = Array.from({ length: days }, (_, index) => {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    date.setDate(date.getDate() - (days - index - 1));
+function contributionActivity(days: number, startDate?: string, endDate?: string) {
+  if (!startDate && !endDate && contributionCache && Date.now() - contributionCache.at < 300000) return contributionCache.days;
+  const end = endDate ? new Date(`${endDate}T00:00:00`) : new Date();
+  end.setHours(0, 0, 0, 0);
+  const start = startDate ? new Date(`${startDate}T00:00:00`) : new Date(end);
+  if (!startDate) start.setDate(start.getDate() - (days - 1));
+  const span = Math.max(1, Math.min(730, Math.floor((end.getTime() - start.getTime()) / 86400000) + 1));
+  const result = Array.from({ length: span }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(date.getDate() + index);
     return { date: date.toISOString().slice(0, 10), repos: {} as Record<string, number>, total: 0 };
   });
   const byDate = new Map(result.map((day) => [day.date, day]));
@@ -372,7 +381,7 @@ function contributionActivity(days: number) {
   let repoNames: string[] = [];
   try {
     const dashboard = JSON.parse(readFileSync(join(DIR, "dashboard.json"), "utf8"));
-    repoNames = (dashboard.gitObserver?.repos || []).map((repo: { path?: string }) => repo.path).filter(Boolean);
+    repoNames = (dashboard.gitObserver?.repos || []).map((repo: { path?: string }) => repo.path).filter((path: string | undefined): path is string => Boolean(path && existsSync(join(ROOT, path, ".git"))));
   } catch {}
   if (!repoNames.length) {
     let entries: ReturnType<typeof readdirSync> = [];
@@ -399,7 +408,7 @@ function contributionActivity(days: number) {
       day.total++;
     }
   }
-  contributionCache = { at: Date.now(), days: result };
+  if (!startDate && !endDate) contributionCache = { at: Date.now(), days: result };
   return result;
 }
 function projectsFromActivity(files: ActivityFile[]) {
@@ -515,15 +524,26 @@ function watchHtml() {
     .meta { display:grid; grid-template-columns: 34px 34px minmax(140px,180px) minmax(0,1fr); gap:8px; margin-bottom:8px; color:var(--muted); font-size:12px; align-items:center; min-width:0; }
     .meta > * { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .tool-button { width:26px; height:26px; border:1px solid var(--line); border-radius:999px; cursor:pointer; box-shadow:0 1px 2px rgba(31,41,51,.12); }
-    .machine-strip { display:grid; grid-template-columns:38px minmax(250px,1.2fr) minmax(360px,1.7fr) minmax(130px,.65fr) minmax(150px,.75fr) max-content; gap:6px; margin-bottom:8px; align-items:center; min-height:54px; padding:7px; background:rgba(255,255,255,.76); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(31,41,51,.05); }
+    .machine-strip { display:flex; align-items:center; gap:18px; min-height:34px; margin-bottom:8px; padding:5px 10px; color:var(--muted); }
+    .machine-strip .observer { padding:0; border:0; }
+    .machine-strip .activity { flex:1; }
+    .machine-strip .radar, .machine-strip .focus { flex:0 1 auto; }
     .machine-card { min-width:0; padding:0 8px; border-left:1px solid rgba(215,222,229,.72); }
     .machine-card:first-child { border-left:0; padding:0; display:flex; justify-content:center; }
     .machine-card span { display:block; color:var(--muted); font-size:9px; line-height:1; font-weight:500; letter-spacing:.08em; text-transform:uppercase; margin-bottom:3px; }
     .machine-card b { display:block; color:var(--text); font-size:12px; line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .machine-card.activity b { white-space:nowrap; display:block; }
-    .activity-history { min-width:190px; }
-    .activity-bars { display:flex; align-items:end; gap:2px; height:25px; padding-top:2px; }
-    .activity-day { flex:1 1 0; min-width:2px; height:100%; display:flex; flex-direction:column-reverse; justify-content:flex-start; border-radius:1px 1px 0 0; overflow:hidden; background:#edf1f4; }
+    .activity-history { position:relative; margin-bottom:10px; padding:14px 16px 12px; border:1px solid var(--line); border-radius:10px; background:#fff; box-shadow:0 8px 24px rgba(31,41,51,.05); }
+    .activity-history-header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+    .activity-history-title { color:var(--text); font-size:13px; font-weight:600; }
+    .activity-history-title small { margin-left:7px; color:var(--muted); font-size:10px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; }
+    .graph-expand, .graph-range input { border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--muted); padding:5px 8px; font:500 11px/1 var(--font-sans); cursor:pointer; }
+    .graph-range { display:flex; align-items:center; gap:4px; color:var(--muted); font-size:10px; }
+    .graph-range input { padding:4px 6px; }
+    .graph-expand:hover { color:var(--text); background:#f7f9fb; }
+    .activity-bars { display:flex; align-items:end; gap:4px; height:120px; padding-top:4px; }
+    .activity-day { position:relative; flex:1 1 0; min-width:5px; height:100%; display:flex; flex-direction:column-reverse; justify-content:flex-start; border-radius:3px 3px 0 0; overflow:hidden; background:#edf1f4; cursor:crosshair; transition:filter 120ms ease, transform 120ms ease; }
+    .activity-day:hover, .activity-day:focus { filter:saturate(1.25); transform:scaleX(1.08); outline:2px solid rgba(21,94,239,.35); outline-offset:1px; }
     .activity-day i { display:block; width:100%; min-height:0; }
     .activity-day .source { background:#155eef; }
     .activity-day .generated { background:#60a5fa; }
@@ -531,9 +551,16 @@ function watchHtml() {
     .activity-day.today { box-shadow:0 0 0 1px rgba(21,94,239,.35); }
     .machine-card.observer span, .machine-card.observer b { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
     .observer-indicator { position:relative; display:block; width:18px; height:18px; border-radius:999px; background:#16a34a; box-shadow:0 0 0 4px rgba(22,163,74,.14); }
-    .observer-indicator::before { content:""; position:absolute; inset:-5px; border:2px solid rgba(22,163,74,.24); border-top-color:#16a34a; border-radius:999px; animation:observer-spin 900ms linear infinite; }
+    .observer-indicator::before { content:""; position:absolute; inset:-5px; border:2px solid rgba(22,163,74,.24); border-radius:999px; }
     .observer-indicator::after { content:""; position:absolute; inset:5px; border-radius:999px; background:#fff; opacity:.86; }
-    .machine-updated { min-width:0; padding:0 8px; border-left:1px solid rgba(215,222,229,.72); color:var(--muted); font-size:11px; font-weight:500; white-space:nowrap; }
+    .machine-updated { margin-left:auto; color:var(--muted); font-size:10px; white-space:nowrap; }
+    .activity-tooltip { position:fixed; z-index:100; display:none; max-width:300px; padding:9px 11px; border:1px solid #cbd5df; border-radius:8px; background:rgba(20,30,40,.96); color:#fff; box-shadow:0 8px 28px rgba(15,23,42,.24); font:11px/1.45 var(--font-sans); pointer-events:none; white-space:pre-line; }
+    .activity-tooltip.is-open { display:block; }
+    body.graph-expanded { overflow:hidden; }
+    body.graph-expanded .activity-history { position:fixed; inset:12px; z-index:90; margin:0; padding:24px; display:flex; flex-direction:column; }
+    body.graph-expanded .activity-bars { flex:1; height:auto; gap:7px; }
+    body.graph-expanded .activity-history-title { font-size:20px; }
+    body.graph-expanded .graph-expand { padding:8px 12px; }
     .page-nav { display:inline-flex; align-items:stretch; gap:0; height:100%; margin:0; padding:0; overflow-x:auto; background:#fff; scrollbar-width:none; }
     .page-nav::-webkit-scrollbar { display:none; }
     .page-nav a { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; color:#667085; padding:0 14px; border-bottom:2px solid transparent; font:500 12px/1 var(--font-sans); text-decoration:none; white-space:nowrap; }
@@ -602,17 +629,14 @@ function watchHtml() {
       0% { background:var(--repo-wash, var(--glow)); }
       100% { background:transparent; }
     }
-    @keyframes observer-spin {
-      to { transform:rotate(360deg); }
-    }
     @media (prefers-reduced-motion: reduce) {
       tr.pulse, tr.pulse td { animation:none; }
-      .observer-indicator::before { animation:none; }
     }
     @media (max-width: 980px) {
       main { width:100%; }
-      .machine-strip { grid-template-columns:38px minmax(220px,1fr) minmax(300px,1.4fr) minmax(120px,.7fr); }
+      .machine-strip { gap:10px; }
       .machine-card.focus, .machine-updated { display:none; }
+      .activity-bars { gap:3px; height:100px; }
     }
     @media (max-width: 720px) {
       table, thead, tbody, tr, th, td { display:block; }
@@ -631,8 +655,11 @@ function watchHtml() {
       .page-nav a { padding:0 11px; }
       .meta { grid-template-columns:34px 34px minmax(0,1fr); }
       .meta > div:nth-of-type(2) { display:none; }
-      .machine-strip { grid-template-columns:34px minmax(0,1fr) max-content; }
+      .machine-strip { gap:8px; padding-inline:4px; }
       .machine-card.radar { display:none; }
+      .activity-history { padding:12px 10px 10px; }
+      .activity-bars { gap:2px; height:88px; }
+      .activity-day { min-width:2px; }
       .machine-card.activity { border-left:0; }
       td { grid-template-columns:72px minmax(0,1fr); }
     }
@@ -648,13 +675,16 @@ function watchHtml() {
     <div class="meta"><button class="tool-button project-toggle" id="projectToggle" type="button" aria-label="Toggle project recency"></button><div id="count">loading</div><div>${ROOT}</div></div>
     <section class="machine-strip" aria-live="polite">
       <div class="machine-card observer"><i class="observer-indicator" aria-hidden="true"></i><span>Observer</span><b id="machineState" class="state-running">loading</b></div>
-      <div class="machine-card activity"><span>Latest Signal</span><b id="machineActivity">loading</b></div>
-      <div class="machine-card activity-history"><span>Your commits · 42 days</span><div class="activity-bars" id="activityHistory" aria-label="Daily activity over the last 42 days"></div></div>
-      <div class="machine-card agents"><span>Agents</span><b id="agentPresence">none</b></div>
-      <div class="machine-card radar"><span>Git Radar</span><b id="gitRadar">—</b></div>
+      <div class="machine-card activity"><span>Latest</span><b id="machineActivity">loading</b></div>
+      <div class="machine-card radar"><span>Git</span><b id="gitRadar">—</b></div>
       <div class="machine-card focus"><span>Focus</span><b id="gitFocus">—</b></div>
       <div class="machine-updated" id="updated">Updated —</div>
     </section>
+    <section class="activity-history" id="activityHistoryPanel" aria-labelledby="activityHistoryTitle">
+      <div class="activity-history-header"><div class="activity-history-title" id="activityHistoryTitle">Your commits <small id="activityRangeLabel">42 days</small></div><label class="graph-range">From <input id="activityStart" type="date"></label><label class="graph-range">To <input id="activityEnd" type="date"></label><button class="graph-expand" id="graphExpand" type="button" aria-expanded="false">Expand</button></div>
+      <div class="activity-bars" id="activityHistory" aria-label="Daily authored commits over the last 42 days"></div>
+    </section>
+    <div class="activity-tooltip" id="activityTooltip" role="tooltip"></div>
     <table>
       <thead id="head"><tr><th>Updated</th><th>File</th><th>Size</th></tr></thead>
       <tbody id="files"><tr><td colspan="3">loading</td></tr></tbody>
@@ -925,16 +955,12 @@ function watchHtml() {
       const maxDay = Math.max(1, ...days.map((day) => day.total || 0));
       document.getElementById("activityHistory").innerHTML = days.map((day, index) => {
         const total = day.total || 0;
-        const height = Math.max(total ? 12 : 2, Math.round(total / maxDay * 100));
+        const height = Math.max(total ? 10 : 1, Math.round(total / maxDay * 100));
         const repos = Object.entries(day.repos || {}).sort((a, b) => b[1] - a[1]);
-        const title = day.date + ": " + total + (total === 1 ? " commit" : " commits") + (repos.length ? " · " + repos.map(([repo, count]) => repo + " " + count).join(", ") : "");
-        const segments = repos.map(([repo, count]) => '<i style="height:' + Math.max(5, count / total * height) + '%;background:' + repoColor(repo).a + '"></i>').join("");
-        return '<div class="activity-day ' + (index === days.length - 1 ? 'today' : '') + '" title="' + title + '">' + segments + '</div>';
+        const detail = day.date + "\\n" + total + (total === 1 ? " authored commit" : " authored commits") + (repos.length ? "\\n\\n" + repos.map(([repo, count]) => repo + " · " + count).join("\\n") : "");
+        const segments = repos.map(([repo, count]) => '<i style="height:' + Math.max(3, count / total * height) + '%;background:' + repoColor(repo).a + '"></i>').join("");
+        return '<div class="activity-day ' + (index === days.length - 1 ? 'today' : '') + '" tabindex="0" data-detail="' + escapeHtml(detail) + '" aria-label="' + escapeHtml(day.date + ", " + total + " commits") + '">' + segments + '</div>';
       }).join("");
-      const agents = Array.isArray(data.agents) ? data.agents : [];
-      const presence = document.getElementById("agentPresence");
-      presence.textContent = agents.length ? agents.map((agent) => agent.agent + " · " + agent.state).join(" / ") : "none";
-      presence.title = agents.map((agent) => agent.repo + ": " + (agent.note || agent.state)).join("\\n");
       const changed = new Set();
       const changedRepos = new Map();
       const eventList = Array.isArray(data.events) ? data.events : [];
@@ -970,6 +996,8 @@ function watchHtml() {
       document.getElementById("count").textContent = data.files.length + " recent files";
       document.getElementById("head").innerHTML = "<tr><th>Updated</th><th>File</th><th>Size</th></tr>";
       document.getElementById("updated").textContent = "Updated " + fmt.format(new Date(data.generatedAt));
+      const rangeDays = Array.isArray(data.dailyActivity) ? data.dailyActivity : [];
+      document.getElementById("activityRangeLabel").textContent = rangeDays.length === 1 ? "1 day" : rangeDays.length + " days";
       const deleted = [...deletedRows.values()].map((event) => ({ path: event.path, signal: event.signal, mtimeIso: event.mtimeIso, size: event.previousSize || 0, deleted: true }));
       const rows = [...deleted, ...data.files].slice(0, 240);
       document.getElementById("files").innerHTML = rows.map((file, i) => {
@@ -979,16 +1007,62 @@ function watchHtml() {
       }).join("");
       firstRender = false;
     }
+    function defaultRange() {
+      const end = new Date();
+      const start = new Date(end);
+      start.setDate(start.getDate() - 41);
+      const iso = (date) => date.toISOString().slice(0, 10);
+      const startInput = document.getElementById("activityStart");
+      const endInput = document.getElementById("activityEnd");
+      if (!startInput.value) startInput.value = iso(start);
+      if (!endInput.value) endInput.value = iso(end);
+    }
     async function tick() {
-      const res = await fetch("/api/recent-files", { cache: "no-store" });
+      const params = new URLSearchParams();
+      const start = document.getElementById("activityStart").value;
+      const end = document.getElementById("activityEnd").value;
+      if (start) params.set("start", start);
+      if (end) params.set("end", end);
+      const res = await fetch("/api/recent-files" + (params.size ? "?" + params : ""), { cache: "no-store" });
       render(await res.json());
     }
+    const activityTooltip = document.getElementById("activityTooltip");
+    function showActivityTooltip(target, event) {
+      const detail = target?.dataset?.detail;
+      if (!detail) return;
+      activityTooltip.textContent = detail;
+      activityTooltip.classList.add("is-open");
+      const rect = target.getBoundingClientRect();
+      const x = event?.clientX || rect.left + rect.width / 2;
+      const y = event?.clientY || rect.top;
+      const left = Math.min(innerWidth - 320, Math.max(10, x + 12));
+      const top = Math.min(innerHeight - activityTooltip.offsetHeight - 10, Math.max(10, y - activityTooltip.offsetHeight - 10));
+      activityTooltip.style.left = left + "px";
+      activityTooltip.style.top = top + "px";
+    }
+    document.getElementById("activityHistory").addEventListener("pointermove", (event) => showActivityTooltip(event.target.closest(".activity-day"), event));
+    document.getElementById("activityHistory").addEventListener("pointerleave", () => activityTooltip.classList.remove("is-open"));
+    document.getElementById("activityHistory").addEventListener("focusin", (event) => showActivityTooltip(event.target.closest(".activity-day")));
+    document.getElementById("activityHistory").addEventListener("focusout", () => activityTooltip.classList.remove("is-open"));
+    const graphExpand = document.getElementById("graphExpand");
+    graphExpand.addEventListener("click", () => {
+      const expanded = !document.body.classList.contains("graph-expanded");
+      document.body.classList.toggle("graph-expanded", expanded);
+      graphExpand.setAttribute("aria-expanded", expanded ? "true" : "false");
+      graphExpand.textContent = expanded ? "Close" : "Expand";
+    });
+    addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && document.body.classList.contains("graph-expanded")) graphExpand.click();
+    });
+    defaultRange();
+    document.getElementById("activityStart").addEventListener("change", tick);
+    document.getElementById("activityEnd").addEventListener("change", tick);
     loadMachine();
     setInterval(loadMachine, 2500);
     tick();
     setInterval(tick, 5000);
     const events = new EventSource("/api/recent-files/events");
-    events.addEventListener("activity", (event) => render(JSON.parse(event.data)));
+    events.addEventListener("activity", () => tick());
     events.onerror = () => setTimeout(tick, 1500);
   </script>
   ${pwaScript()}
@@ -4283,7 +4357,13 @@ Bun.serve({
     if (url.pathname === "/" || url.pathname === "/watch") return new Response(watchHtml(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
     if (url.pathname === "/dashboard" || url.pathname === "/dashboard.html" || url.pathname === "/index.html") return Response.redirect(`http://${HOST}:${PORT}/`, 302);
     if (url.pathname === "/orb") return new Response(orbHtml(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
-    if (url.pathname === "/api/recent-files") return new Response(activityPayload(), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    if (url.pathname === "/api/recent-files") {
+      const start = url.searchParams.get("start") || undefined;
+      const end = url.searchParams.get("end") || undefined;
+      const payload = JSON.parse(activityPayload());
+      if (start || end) payload.dailyActivity = contributionActivity(42, start, end);
+      return new Response(JSON.stringify(payload), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    }
     if (url.pathname === "/api/agents") return new Response(JSON.stringify({ version: "glance.agent.v1", agents: currentAgents() }, null, 2), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
     if (url.pathname === "/api/recent-files/events") {
       let activityController: ReadableStreamDefaultController | null = null;

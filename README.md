@@ -84,8 +84,8 @@ GLANCE_ROOT=~/projects bun run server
 Open either view:
 
 ```text
-http://127.0.0.1:8787/       # Watch
-http://127.0.0.1:8787/orb    # Orb
+http://127.0.0.1:8788/       # Watch
+http://127.0.0.1:8788/orb    # Orb
 ```
 
 Glance observes the immediate projects beneath `GLANCE_ROOT`. If the variable is omitted, it observes the parent directory of its own checkout.
@@ -98,7 +98,7 @@ bun test
 
 ## Try Orb
 
-1. Open `http://127.0.0.1:8787/orb`.
+1. Open `http://127.0.0.1:8788/orb`.
 2. Modify files in one or more observed projects.
 3. Watch each project produce its own color, pulse, trace, and sound.
 4. Open **Orb Lab** to switch between Lava and Water or Room and Buddy modes.
@@ -165,6 +165,7 @@ Configuration may be supplied through `glance.config.json` or environment variab
 | Setting | Purpose |
 |---|---|
 | `GLANCE_ROOT` | Directory whose projects and activity should be observed. |
+| `GLANCE_PORT` | Local HTTP port. Defaults to Glance's dedicated port, `8788`. |
 | `GLANCE_CONFIG` | Path to a JSON config file. Defaults to `./glance.config.json`. |
 | `GLANCE_CONTEXT_DIR` | Optional directory, relative to the root or absolute, containing `runs/` and `events.jsonl`. |
 | `GLANCE_GIT_MAX_DEPTH` | Maximum directory depth for discovering git repositories. |
